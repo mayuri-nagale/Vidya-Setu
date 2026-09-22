@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 function Icon({ type }) {
@@ -8,6 +9,7 @@ function Icon({ type }) {
 }
 
 export default function StudentLiveDashboard() {
+  const router = useRouter();
   const [student, setStudent] = useState(null);
   const [lectures, setLectures] = useState([]);
   const [active, setActive] = useState("home");
@@ -88,10 +90,15 @@ export default function StudentLiveDashboard() {
 
   const downloads = lectures.flatMap((lecture) => (lecture.resources || []).map((file) => { const saved = savedDownloads.find((item) => item.fileId === file.fileId); return { ...file, title: lecture.title, chapter: lecture.chapter, lecture, progress: saved?.progress || 0, completed: saved?.completed || false, bytesReceived: saved?.bytesReceived || 0, totalBytes: saved?.totalBytes || 0 }; }));
 
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.replace("/");
+  }
+
   if (error) return <main className="flex min-h-screen items-center justify-center bg-[#f4f7f2] p-6 text-center text-[#173b35]"><div className="rounded-2xl bg-white p-8 shadow-lg"><h1 className="text-xl font-bold">Student session unavailable</h1><p className="mt-2 text-sm text-[#81918a]">{error}</p></div></main>;
 
   return <main className="min-h-screen bg-[#f4f7f2] text-[#173b35]"><div className="mx-auto flex min-h-screen max-w-375">
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-[#dfe9e1] bg-white px-5 py-6 lg:flex"><div className="flex items-center gap-3 px-2"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f5c86b] text-lg font-bold">V</div><div><p className="font-bold">vidya setu</p><p className="text-[10px] uppercase tracking-[0.2em] text-[#91a29a]">Student portal</p></div></div><nav className="mt-12 flex-1 space-y-1"><Nav active={active === "home"} onClick={() => setActive("home")} icon="home" label="Home" /><Nav active={active === "subjects"} onClick={() => setActive("subjects")} icon="subjects" label="Subjects" /><Nav active={active === "downloads"} onClick={() => setActive("downloads")} icon="downloads" label="Downloads" /><Nav active={active === "quizzes"} onClick={() => setActive("quizzes")} icon="file" label="My Quizzes" badge={quizzes.length} /><Nav active={active === "doubts"} onClick={() => { setActive("doubts"); fetch("/api/student/doubts", { method: "PATCH" }); setUnreadReplies(0); }} icon="updates" label="My Doubts" badge={unreadReplies} /><Nav active={active === "updates"} onClick={() => setActive("home")} icon="updates" label="Updates" badge={lectures.length} /></nav><div className="border-t border-[#e5ede7] pt-5"><p className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[0.2em] text-[#9aaa9f]">My profile</p><p className="px-2 text-sm font-bold">{student?.name || "Loading..."}</p><p className="mt-1 px-2 text-xs text-[#81918a]">{student?.standard} · Division {student?.division}</p><p className="mt-1 px-2 text-xs text-[#81918a]">Roll no. {student?.rollNumber}</p><p className="mt-1 truncate px-2 text-xs text-[#81918a]">{student?.email}</p></div></aside>
+    <aside className="hidden w-64 shrink-0 flex-col border-r border-[#dfe9e1] bg-white px-5 py-6 lg:flex"><div className="flex items-center gap-3 px-2"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#f5c86b] text-lg font-bold">V</div><div><p className="font-bold">vidya setu</p><p className="text-[10px] uppercase tracking-[0.2em] text-[#91a29a]">Student portal</p></div></div><nav className="mt-12 flex-1 space-y-1"><Nav active={active === "home"} onClick={() => setActive("home")} icon="home" label="Home" /><Nav active={active === "subjects"} onClick={() => setActive("subjects")} icon="subjects" label="Subjects" /><Nav active={active === "downloads"} onClick={() => setActive("downloads")} icon="downloads" label="Downloads" /><Nav active={active === "quizzes"} onClick={() => setActive("quizzes")} icon="file" label="My Quizzes" badge={quizzes.length} /><Nav active={active === "doubts"} onClick={() => { setActive("doubts"); fetch("/api/student/doubts", { method: "PATCH" }); setUnreadReplies(0); }} icon="updates" label="My Doubts" badge={unreadReplies} /><Nav active={active === "updates"} onClick={() => setActive("home")} icon="updates" label="Updates" badge={lectures.length} /></nav><div className="mt-auto border-t border-[#e5ede7] pt-5"><button type="button" onClick={handleLogout} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#173b35] px-3 py-3 text-sm font-semibold text-white transition hover:bg-[#0f2d2a]">Logout</button><div className="mt-5"><p className="mb-3 px-2 text-[10px] font-bold uppercase tracking-[0.2em] text-[#9aaa9f]">My profile</p><p className="px-2 text-sm font-bold">{student?.name || "Loading..."}</p><p className="mt-1 px-2 text-xs text-[#81918a]">{student?.standard} · Division {student?.division}</p><p className="mt-1 px-2 text-xs text-[#81918a]">Roll no. {student?.rollNumber}</p><p className="mt-1 truncate px-2 text-xs text-[#81918a]">{student?.email}</p></div></div></aside>
     <section className="min-w-0 flex-1 px-5 py-5 sm:px-8 lg:px-10"><header className="flex items-center justify-between border-b border-[#dfe9e1] pb-5"><div><p className="text-sm text-[#85968e]">{student?.standard} · Division {student?.division}</p><h1 className="mt-1 text-2xl font-bold sm:text-3xl">Welcome, {student?.name || "student"}</h1><p className="mt-1 text-sm text-[#81918a]">Content shared by your assigned teacher appears here.</p></div><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#1d5148] text-sm font-bold text-white">{student?.name?.split(" ").map((part) => part[0]).join("") || "ST"}</div></header>
       {active === "home" && <><Home lectures={lectures} setActive={setActive} openResource={openResource} versionAlerts={versionAlerts} /><ResumePanel files={downloads.filter((file) => file.progress > 0 && !file.completed)} onResume={() => setActive("downloads")} /></>}
       {active === "subjects" && <Subjects chapters={chapters} openChapter={openChapter} setOpenChapter={setOpenChapter} openResource={openResource} />}

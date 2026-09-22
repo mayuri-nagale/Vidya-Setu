@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import StudentDashboard from "../../components/StudentLiveDashboard";
-import NearbyShareLauncher from "../../components/NearbyShareLauncher";
 
 export default function StudentPage() {
   const router = useRouter();
@@ -109,5 +108,5 @@ export default function StudentPage() {
     );
   }
 
-  return <><StudentDashboard /><NearbyShareLauncher /></>;
+  return <StudentDashboard />;
 }
