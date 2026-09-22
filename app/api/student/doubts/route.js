@@ -1,0 +1,36 @@
+import { NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
+import { getDb } from "../../../../lib/mongodb";
+import { getCurrentStudentId } from "../../../../lib/auth";
+
+export async function GET() {
+  const studentId = await getCurrentStudentId();
+  if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const db = await getDb();
+  const doubts = await db.collection("doubts").find({ studentId }).sort({ createdAt: -1 }).toArray();
+  const unreadReplies = doubts.filter((doubt) => doubt.replies?.length && (!doubt.studentRepliesReadAt || new Date(doubt.studentRepliesReadAt) < new Date(doubt.replies.at(-1).createdAt))).length;
+  return NextResponse.json({ unreadReplies, doubts: doubts.map((doubt) => ({ ...doubt, _id: doubt._id.toString(), lectureId: doubt.lectureId.toString() })) });
+}
+
+export async function PATCH() {
+  const studentId = await getCurrentStudentId();
+  if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const db = await getDb();
+  await db.collection("doubts").updateMany({ studentId, "replies.0": { $exists: true } }, { $set: { studentRepliesReadAt: new Date() } });
+  return NextResponse.json({ ok: true });
+}
+
+export async function POST(request) {
+  const studentId = await getCurrentStudentId();
+  if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const body = await request.json();
+  if (!body.lectureId || !String(body.question || "").trim()) return NextResponse.json({ error: "Lecture and doubt are required." }, { status: 400 });
+  const db = await getDb();
+  const student = await db.collection("students").findOne({ studentId });
+  if (!ObjectId.isValid(body.lectureId)) return NextResponse.json({ error: "Invalid lecture." }, { status: 400 });
+  const lecture = await db.collection("lectures").findOne({ _id: new ObjectId(body.lectureId), assignedStandards: student?.standard, assignedDivisions: student?.division });
+  if (!lecture) return NextResponse.json({ error: "Lecture is not assigned to this student." }, { status: 403 });
+  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], createdAt: new Date() };
+  const result = await db.collection("doubts").insertOne(doubt);
+  return NextResponse.json({ doubt: { ...doubt, _id: result.insertedId.toString(), lectureId: lecture._id.toString() } }, { status: 201 });
+}
