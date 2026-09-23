@@ -269,6 +269,9 @@ export default function StudentLiveDashboard() {
   const [reminderUpdates, setReminderUpdates] = useState([]);
   const [syncAttempt, setSyncAttempt] = useState(0);
   const [dataRefresh, setDataRefresh] = useState(0);
+  const [aiMessages, setAiMessages] = useState([
+    { role: "assistant", content: "Hi! I'm Vidya Setu AI. What would you like to learn today?" },
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -552,6 +555,12 @@ export default function StudentLiveDashboard() {
               label="Updates"
               badge={reminderUpdates.length}
             />
+            <Nav
+              active={active === "ai"}
+              onClick={() => setActive("ai")}
+              icon="file"
+              label="AI Assistant"
+            />
           </nav>
           <div className="mt-auto border-t border-[#e5ede7] pt-5">
             <button
@@ -636,6 +645,7 @@ export default function StudentLiveDashboard() {
             />
           )}
           {active === "updates" && <UpdatesView versionAlerts={versionAlerts} reminderUpdates={reminderUpdates} doubts={doubts} savedDownloads={savedDownloads} />}
+          {active === "ai" && <AIAssistant online={online} messages={aiMessages} setMessages={setAiMessages} />}
           {!online && (
             <div className="mt-5 rounded-xl border border-[#f0bd4c] bg-[#fff6df] px-4 py-3 text-sm font-semibold text-[#8a681d]">
               You are offline. Downloads are paused and doubts will sync when
@@ -2010,6 +2020,68 @@ function LessonHelper({ resource, online, timestamp, pageNumber, setPageNumber, 
       </form>
       {status && <p className="mt-3 text-xs font-semibold text-[#a14d2a]">{status}</p>}
     </section>
+  );
+}
+
+function AIAssistant({ online, messages, setMessages }) {
+  const [question, setQuestion] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    const trimmed = question.trim();
+    if (!trimmed || loading) return;
+    if (!online) {
+      setError("AI Assistant requires internet access.");
+      return;
+    }
+    setError("");
+    setQuestion("");
+    const nextMessages = [...messages, { role: "user", content: trimmed }];
+    setMessages(nextMessages);
+    setLoading(true);
+    try {
+      const response = await fetch("/api/student/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: nextMessages }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Vidya Setu AI could not respond right now.");
+      setMessages((current) => [...current, { role: "assistant", content: result.answer }]);
+    } catch (requestError) {
+      setError(requestError.message || "Vidya Setu AI could not respond right now.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="mt-7 flex min-h-[calc(100vh-12rem)] flex-col">
+      <div>
+        <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#6d7f99]">Learning support</p>
+        <h2 className="mt-1 text-3xl font-bold tracking-tight text-[#172b4d]">Vidya Setu AI</h2>
+        <p className="mt-2 text-base text-[#81918a]">Your AI Learning Assistant</p>
+      </div>
+      <section className="workspace-card mt-6 flex min-h-0 flex-1 flex-col rounded-2xl border border-[#d8e3ef] bg-white p-4 sm:p-6">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
+          {messages.map((message, index) => (
+            <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-[#155db2] text-white" : "bg-[#f2f8ff] text-[#172b4d]"}`}>
+                {message.content}
+              </div>
+            </div>
+          ))}
+          {loading && <div className="flex justify-start"><div className="rounded-2xl bg-[#f2f8ff] px-4 py-3 text-sm text-[#6d7f99]">Vidya Setu AI is thinking...</div></div>}
+        </div>
+        {error && <p className="mt-4 rounded-xl bg-[#fff6df] px-4 py-3 text-sm font-semibold text-[#8a681d]">{error}</p>}
+        <form onSubmit={submit} className="mt-4 flex gap-2 border-t border-[#edf2f8] pt-4">
+          <input value={question} onChange={(event) => setQuestion(event.target.value)} disabled={loading} maxLength={2000} placeholder="Ask Vidya Setu AI..." className="min-w-0 flex-1 rounded-xl border border-[#d7e2dc] px-4 py-3 text-sm outline-none focus:border-[#155db2]" />
+          <button type="submit" disabled={loading || !question.trim()} className="rounded-xl bg-[#155db2] px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">Send</button>
+        </form>
+      </section>
+    </div>
   );
 }
 
