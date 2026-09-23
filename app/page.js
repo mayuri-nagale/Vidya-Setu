@@ -89,8 +89,7 @@ export default function HomePage() {
                   id="user-id"
                   name="user-id"
                   type="text"
-                  placeholder={role === "student" ? "TCH-001" : "TCH-001"}
-                  defaultValue={role === "student" ? "TCH-001" : "TCH-001"}
+                  placeholder={role === "student" ? "Enter your student ID" : "Enter your teacher ID"}
                   className="mt-2 h-14 w-full rounded-xl border border-[#d7e2dc] bg-[#eaf0f7] px-4 text-base font-normal text-[#173b35] outline-none transition placeholder:text-[#7b8e89] focus:border-[#1d5148] focus:ring-4 focus:ring-[#1d5148]/10"
                   required
                 />

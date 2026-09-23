@@ -63,7 +63,9 @@ export async function GET(request) {
           send("error", { message: "Live updates temporarily unavailable." });
         }
       };
-      const interval = setInterval(poll, 2000);
+      // A light polling interval keeps this MVP compatible with local MongoDB
+      // and Atlas free tiers without issuing five queries every two seconds.
+      const interval = setInterval(poll, 10000);
       stop = close;
       request.signal.addEventListener("abort", close, { once: true });
       send("connected", { role: studentId ? "student" : "teacher" });

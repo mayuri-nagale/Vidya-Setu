@@ -8,9 +8,10 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const db = await getDb();
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const notifications = await db
     .collection("notifications")
-    .find({ recipientRole: "teacher", recipientId: teacherId })
+    .find({ recipientRole: "teacher", recipientId: teacherId, createdAt: { $gte: since } })
     .sort({ createdAt: -1 })
     .limit(30)
     .toArray();

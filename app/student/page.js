@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import StudentDashboard from "../../components/StudentLiveDashboard";
 
 export default function StudentPage() {
@@ -21,9 +21,10 @@ export default function StudentPage() {
     }
   }
 
-  if (typeof window !== "undefined" && loading && !message) {
-    checkAuth();
-  }
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void checkAuth(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function handleSubmit(event) {
     event.preventDefault();

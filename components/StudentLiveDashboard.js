@@ -6,6 +6,12 @@ import NearbyShareLauncher from "./NearbyShareLauncher";
 
 const QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const RESOURCE_CACHE = "vidya-setu-offline-resources-v1";
+const NOTIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function isRecentNotification(value) {
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) && timestamp >= Date.now() - NOTIFICATION_MAX_AGE_MS;
+}
 
 function queueKey(studentId, type) {
   return `vidya_setu_queue_v2:${studentId}:${type}`;
@@ -164,7 +170,7 @@ export default function StudentLiveDashboard() {
           content.lectures
             .filter((lecture) => lecture.versionChanges?.length)
             .flatMap((lecture) =>
-              lecture.versionChanges.map((change) => ({
+              lecture.versionChanges.filter((change) => isRecentNotification(change.createdAt || lecture.updatedAt)).map((change) => ({
                 ...change,
                 title: lecture.title,
                 chapter: lecture.chapter,
@@ -221,9 +227,9 @@ export default function StudentLiveDashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        return response.ok;
+        return { ok: response.ok, conflict: response.status === 409 };
       } catch {
-        return false;
+        return { ok: false, conflict: false };
       }
     }
 
@@ -237,7 +243,7 @@ export default function StudentLiveDashboard() {
       const doubtResults = await Promise.all(
         pendingDoubts.map((item) => postQueuedItem("/api/student/doubts", item)),
       );
-      const remainingDoubts = pendingDoubts.filter((_, index) => !doubtResults[index]);
+      const remainingDoubts = pendingDoubts.filter((_, index) => !doubtResults[index].ok);
       savePendingItems(pendingDoubtsKey, remainingDoubts);
 
       const pendingQuizKeys = Object.keys(localStorage).filter((key) =>
@@ -250,13 +256,19 @@ export default function StudentLiveDashboard() {
           if (!valid) {
             localStorage.setItem(`${key}:review`, JSON.stringify(payload));
             localStorage.removeItem(key);
-            return Promise.resolve(true);
+            return Promise.resolve({ ok: true, conflict: false });
           }
-          return postQueuedItem("/api/student/quizzes", payload);
+          return postQueuedItem("/api/student/quizzes", payload).then((result) => {
+            if (result.conflict) {
+              localStorage.setItem(`${key}:review`, JSON.stringify(payload));
+              return { ok: true, conflict: true };
+            }
+            return result;
+          });
         }),
       );
       pendingQuizKeys.forEach((key, index) => {
-        if (quizResults[index]) localStorage.removeItem(key);
+        if (quizResults[index].ok) localStorage.removeItem(key);
       });
 
       const pendingDownloadsKey = queueKey(student.studentId, "downloads");
@@ -267,11 +279,11 @@ export default function StudentLiveDashboard() {
       const downloadResults = await Promise.all(
         pendingDownloads.map((item) => postQueuedItem("/api/student/downloads", item)),
       );
-      const remainingDownloads = pendingDownloads.filter((_, index) => !downloadResults[index]);
+      const remainingDownloads = pendingDownloads.filter((_, index) => !downloadResults[index].ok);
       savePendingItems(pendingDownloadsKey, remainingDownloads);
 
       if (cancelled) return;
-      const hasPendingWork = remainingDoubts.length || remainingDownloads.length || quizResults.some((result) => !result);
+      const hasPendingWork = remainingDoubts.length || remainingDownloads.length || quizResults.some((result) => !result.ok);
       setDataRefresh((current) => current + 1);
       if (hasPendingWork) {
         retryTimer = window.setTimeout(() => setSyncAttempt((current) => current + 1), 15000);
@@ -312,12 +324,19 @@ export default function StudentLiveDashboard() {
         completed: saved?.completed || false,
         bytesReceived: saved?.bytesReceived || 0,
         totalBytes: saved?.totalBytes || 0,
+        cached: saved?.cached ?? saved?.completed ?? false,
       };
     }),
   );
   const continueFiles = downloads.filter(
     (file) => file.progress > 0 && !file.completed,
   );
+
+  function openLectureInSubjects(lecture) {
+    const key = `${lecture.subject || "Other subjects"}:${lecture.chapter || "Unassigned chapter"}`;
+    setOpenChapter((current) => current.includes(key) ? current : [...current, key]);
+    setActive("subjects");
+  }
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -458,6 +477,7 @@ export default function StudentLiveDashboard() {
                 lectures={lectures}
                 setActive={setActive}
                 openResource={openResource}
+                openLectureInSubjects={openLectureInSubjects}
                 versionAlerts={versionAlerts}
                 continueFiles={continueFiles}
                 syncState={syncState}
@@ -493,6 +513,7 @@ export default function StudentLiveDashboard() {
                 completed,
                 bytesReceived,
                 totalBytes,
+                cached,
               ) =>
                 saveDownload(
                   item,
@@ -500,6 +521,7 @@ export default function StudentLiveDashboard() {
                   completed,
                   bytesReceived,
                   totalBytes,
+                  cached,
                 )
               }
             />
@@ -548,6 +570,7 @@ export default function StudentLiveDashboard() {
     completed,
     bytesReceived = 0,
     totalBytes = 0,
+    cached = false,
   ) {
     const payload = {
       lectureId: item.lecture._id,
@@ -557,6 +580,7 @@ export default function StudentLiveDashboard() {
       completed,
       bytesReceived,
       totalBytes,
+      cached,
     };
     try {
       const response = await fetch("/api/student/downloads", {
@@ -567,7 +591,7 @@ export default function StudentLiveDashboard() {
       if (!response.ok) throw new Error("Progress sync failed");
       setSavedDownloads((current) => [
         ...current.filter((download) => download.fileId !== item.fileId),
-        { fileId: item.fileId, progress, completed, bytesReceived, totalBytes },
+        { fileId: item.fileId, progress, completed, bytesReceived, totalBytes, cached },
       ]);
     } catch {
       if (!student?.studentId) return;
@@ -580,7 +604,7 @@ export default function StudentLiveDashboard() {
       savePendingItems(pendingKey, next);
       setSavedDownloads((current) => [
         ...current.filter((download) => download.fileId !== item.fileId),
-        { fileId: item.fileId, progress, completed, bytesReceived, totalBytes },
+        { fileId: item.fileId, progress, completed, bytesReceived, totalBytes, cached },
       ]);
     }
   }
@@ -620,6 +644,7 @@ function Home({
   lectures,
   setActive,
   openResource,
+  openLectureInSubjects,
   versionAlerts,
   continueFiles,
   syncState,
@@ -669,7 +694,7 @@ function Home({
             {syncState}
           </span>
         </div>
-        {versionAlerts.length > 0 && (
+        {versionAlerts.length > 0 && !reminderUpdates.length && (
           <div className="mt-4 space-y-2">
             {versionAlerts
               .slice(-3)
@@ -713,7 +738,7 @@ function Home({
               ))}
           </div>
         )}
-        {!versionAlerts.length && (
+        {!versionAlerts.length && !reminderUpdates.length && (
           <p className="mt-3 text-xs text-[#6d7f99]">
             No new teacher updates right now.
           </p>
@@ -830,20 +855,10 @@ function Home({
                 </p>
               )}
               <button
-                onClick={() =>
-                  lecture.resources?.[0] &&
-                  openResource({
-                    ...lecture.resources[0],
-                    lectureId: lecture._id,
-                    title: lecture.title,
-                    chapter: lecture.chapter,
-                    version: lecture.version,
-                    corrections: lecture.corrections || [],
-                  })
-                }
+                onClick={() => openLectureInSubjects(lecture)}
                 className="mt-4 rounded-lg bg-[#e7f2eb] px-3 py-2 text-xs font-bold text-[#1d5148]"
               >
-                Open resource
+                View lesson
               </button>
             </article>
           ))}
@@ -871,28 +886,28 @@ function Subjects({ chapters, openChapter, setOpenChapter, openResource, quizzes
   );
   return (
     <div className="mt-7">
-      <p className="text-xs font-bold uppercase tracking-[0.18em] text-[#6d7f99]">
+      <p className="text-sm font-bold uppercase tracking-[0.16em] text-[#6d7f99]">
         Learning library
       </p>
-      <h2 className="mt-1 text-3xl font-bold tracking-tight text-[#172b4d]">Subjects</h2>
-      <p className="mt-2 text-base text-[#81918a]">
+      <h2 className="mt-1 text-4xl font-bold tracking-tight text-[#172b4d]">Subjects</h2>
+      <p className="mt-3 text-lg leading-7 text-[#617895]">
         Choose a subject, then open a chapter to view its videos, PPTs and PDFs.
       </p>
       <div className="mt-6 space-y-5">
         {subjects.map(([subject, subjectChapters]) => (
           <section
             key={subject}
-            className="workspace-card rounded-2xl border border-[#d8e3ef] bg-white p-5"
+            className="workspace-card rounded-2xl border border-[#d8e3ef] bg-white p-6"
           >
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-xl font-bold text-[#172b4d]">{subject}</h3>
-                <p className="mt-1 text-sm text-[#6d7f99]">
+                <h3 className="text-2xl font-bold text-[#172b4d]">{subject}</h3>
+                <p className="mt-1 text-base text-[#617895]">
                   {Object.keys(subjectChapters).length} chapter
                   {Object.keys(subjectChapters).length === 1 ? "" : "s"}
                 </p>
               </div>
-              <span className="rounded-full bg-[#e5f0ff] px-3 py-1 text-[10px] font-bold text-[#1675ed]">
+              <span className="rounded-full bg-[#e5f0ff] px-3 py-1.5 text-xs font-bold text-[#1675ed]">
                 Subject
               </span>
             </div>
@@ -914,33 +929,33 @@ function Subjects({ chapters, openChapter, setOpenChapter, openResource, quizzes
                       <button
                         type="button"
                         onClick={() => setOpenChapter((current) => isOpen ? current.filter((item) => item !== key) : [...current, key])}
-                        className="flex w-full items-center justify-between gap-3 p-4 text-left"
+                        className="flex w-full items-center justify-between gap-3 p-5 text-left"
                       >
                         <span>
-                          <strong className="block text-base text-[#155db2]">
+                          <strong className="block text-lg text-[#155db2]">
                             {chapter}
                           </strong>
-                          <span className="mt-1 block text-xs text-[#6d7f99]">
+                          <span className="mt-1.5 block text-sm text-[#617895]">
                             {resourceCount} resource
                             {resourceCount === 1 ? "" : "s"} ·{" "}
                             {chapterLectures.length} lecture
                             {chapterLectures.length === 1 ? "" : "s"}
                           </span>
                         </span>
-                        <span className="text-lg text-[#6d7f99]">
+                        <span className="text-2xl text-[#6d7f99]">
                           {isOpen ? "−" : "+"}
                         </span>
                       </button>
                       {isOpen && (
                         <div className="border-t border-[#dce8f7] bg-white">
-                          <div className="border-b border-[#edf2f8] bg-[#f7fbff] p-4">
-                            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#6d7f99]">About this chapter</p>
-                            <p className="mt-2 text-sm leading-6 text-[#365b83]">{chapterLectures[0].description || `Explore ${chapter} through teacher-shared lectures, videos and supporting resources.`}</p>
-                            <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-lg bg-white px-3 py-2 text-[10px] font-bold text-[#1675ed]">{chapterLectures.length} lecture{chapterLectures.length === 1 ? "" : "s"}</span><span className="rounded-lg bg-white px-3 py-2 text-[10px] font-bold text-[#1675ed]">{resourceCount} resources</span><span className="rounded-lg bg-white px-3 py-2 text-[10px] font-bold text-[#149463]">Available online</span></div>
-                            {quizzes.filter((quiz) => quiz.chapter === chapter).map((quiz) => <div key={quiz._id} className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#e2d8fb] bg-[#faf8ff] p-3"><span><strong className="block text-xs text-[#172b4d]">{quiz.title}</strong><span className="text-[10px] text-[#6d7f99]">{quiz.questions.length} questions · {quiz.totalPoints} points</span></span><button type="button" onClick={() => onQuizAttempt(quiz)} className="rounded-lg bg-[#8655d7] px-3 py-2 text-[10px] font-bold text-white">{quiz.attempt ? "View result" : "Attempt quiz"}</button></div>)}
+                          <div className="border-b border-[#edf2f8] bg-[#f7fbff] p-5">
+                            <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#6d7f99]">About this chapter</p>
+                            <p className="mt-2 text-base leading-7 text-[#365b83]">{chapterLectures[0].description || `Explore ${chapter} through teacher-shared lectures, videos and supporting resources.`}</p>
+                            <div className="mt-4 flex flex-wrap gap-2"><span className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-[#1675ed]">{chapterLectures.length} lecture{chapterLectures.length === 1 ? "" : "s"}</span><span className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-[#1675ed]">{resourceCount} resources</span><span className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-[#149463]">Available online</span></div>
+                            {quizzes.filter((quiz) => quiz.chapter === chapter).map((quiz) => <div key={quiz._id} className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#e2d8fb] bg-[#faf8ff] p-4"><span><strong className="block text-base text-[#172b4d]">{quiz.title}</strong><span className="mt-1 block text-sm text-[#617895]">{quiz.questions.length} questions · {quiz.totalPoints} points</span></span><button type="button" onClick={() => onQuizAttempt(quiz)} className="rounded-lg bg-[#8655d7] px-4 py-2.5 text-xs font-bold text-white">{quiz.attempt ? "View result" : "Attempt quiz"}</button></div>)}
                           </div>
-                          <p className="px-4 py-3 text-sm font-bold text-[#172b4d]">Chapter content</p>
-                          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+                          <p className="px-5 py-4 text-base font-bold text-[#172b4d]">Chapter content</p>
+                          <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3">
                           {chapterLectures.flatMap((lecture) =>
                             (lecture.resources || []).map((file) => (
                               <button
@@ -956,23 +971,23 @@ function Subjects({ chapters, openChapter, setOpenChapter, openResource, quizzes
                                     corrections: lecture.corrections || [],
                                   })
                                 }
-                                className="flex min-w-0 items-center gap-3 rounded-xl border border-[#dce8f7] bg-[#f8fbff] p-3 text-left hover:border-[#a8c9ef] hover:bg-white"
+                                className="flex min-w-0 items-center gap-4 rounded-xl border border-[#dce8f7] bg-[#f8fbff] p-4 text-left hover:border-[#a8c9ef] hover:bg-white"
                               >
                                 <ResourceCover
                                   file={{ ...file, title: lecture.title }}
                                   compact
                                 />
                                 <span className="min-w-0 flex-1">
-                                  <strong className="block truncate text-sm text-[#172b4d]">
+                                  <strong className="block truncate text-base text-[#172b4d]">
                                     {lecture.title}
                                   </strong>
-                                  <span className="mt-1 block text-xs text-[#6d7f99]">
+                                  <span className="mt-1.5 block text-sm text-[#617895]">
                                     {file.kind.toUpperCase()} ·{" "}
                                     {versionLabel(lecture.version)} · Click to
                                     open
                                   </span>
                                 </span>
-                                <span className="rounded-lg bg-[#e5f0ff] px-2 py-1 text-[10px] font-bold text-[#1675ed]">
+                                <span className="rounded-lg bg-[#e5f0ff] px-3 py-1.5 text-xs font-bold text-[#1675ed]">
                                   Open
                                 </span>
                               </button>
@@ -1047,11 +1062,12 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
   const [status, setStatus] = useState("");
   const [filter, setFilter] = useState("all");
   const resumable = files.filter((file) => !file.completed);
-  const completed = files.filter((file) => file.completed);
+  const completed = files.filter((file) => file.completed && file.cached);
   async function download(file) {
     setActiveDownload(file.fileId);
     setStatus(`Downloading ${file.filename}...`);
     const start = 0;
+    let lastProgressSavedAt = 0;
     try {
       const response = await fetch(`/api/teacher/files/${file.fileId}`, {
         headers: {},
@@ -1067,28 +1083,29 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
         if (done) break;
         chunks.push(value);
         received += value.length;
-        onProgress(
-          file,
-          total
-            ? Math.round((received / total) * 100)
-            : Math.max(file.progress, 1),
-          false,
-          received,
-          total,
-        );
+        if (Date.now() - lastProgressSavedAt >= 1000) {
+          lastProgressSavedAt = Date.now();
+          void onProgress(file, total ? Math.round((received / total) * 100) : Math.max(file.progress, 1), false, received, total, false);
+        }
       }
       const blob = new Blob(chunks, {
         type:
           response.headers.get("content-type") || "application/octet-stream",
       });
-      await cacheResource(file, blob);
+      let cached = false;
+      try {
+        cached = await cacheResource(file, blob);
+        await navigator.storage?.persist?.();
+      } catch {
+        cached = false;
+      }
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = file.filename;
       link.click();
       URL.revokeObjectURL(link.href);
-      onProgress(file, 100, true, received, total);
-      setStatus(`${file.filename} downloaded`);
+      await onProgress(file, 100, true, received, total, cached);
+      setStatus(cached ? `${file.filename} is ready offline` : `${file.filename} was saved, but browser offline storage is full. Free space and download again for offline viewing.`);
     } catch {
       setStatus(
         `${file.filename} paused. Retry will restart the file safely.`,
@@ -1194,8 +1211,8 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
       </p>
       <h2 className="mt-1 text-2xl font-bold">Downloads</h2>
       <p className="mt-2 text-sm text-[#81918a]">
-        Your offline learning library. Downloads resume from the last saved
-        checkpoint.
+        Completed files are stored for offline viewing. Paused files restart
+        safely because partial file bytes are never saved.
       </p>
       <div className="mt-5 flex gap-2 overflow-x-auto rounded-xl bg-[#f4f7fb] p-1">
         <button
@@ -1260,21 +1277,21 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
 
 function UpdatesView({ versionAlerts, reminderUpdates, doubts, savedDownloads }) {
   const fallbackUpdates = [
-    ...versionAlerts.map((alert, index) => ({
+    ...versionAlerts.filter((alert) => isRecentNotification(alert.createdAt)).map((alert, index) => ({
       id: `local-version-${index}`,
       type: "content_updated",
       title: `${alert.title} was updated`,
       detail: alert.summaryNote || alert.changes || "Your teacher shared a newer version.",
       createdAt: alert.createdAt,
     })),
-    ...doubts.filter((doubt) => doubt.replies?.length).map((doubt) => ({
+    ...doubts.filter((doubt) => doubt.replies?.length && isRecentNotification(doubt.replies.at(-1).createdAt)).map((doubt) => ({
       id: `local-reply-${doubt._id}`,
       type: "doubt_reply",
       title: `Mam replied to your doubt in ${doubt.title}`,
       detail: doubt.replies.at(-1).text,
       createdAt: doubt.replies.at(-1).createdAt,
     })),
-    ...savedDownloads.filter((download) => download.completed).map((download) => ({
+    ...savedDownloads.filter((download) => download.completed && isRecentNotification(download.updatedAt)).map((download) => ({
       id: `local-download-${download.fileId}`,
       type: "download_complete",
       title: "Resource downloaded",
@@ -1282,7 +1299,7 @@ function UpdatesView({ versionAlerts, reminderUpdates, doubts, savedDownloads })
       createdAt: download.updatedAt,
     })),
   ];
-  const updates = reminderUpdates.length ? reminderUpdates : fallbackUpdates;
+  const updates = (reminderUpdates.length ? reminderUpdates : fallbackUpdates).filter((update) => isRecentNotification(update.createdAt));
   const style = {
     reminder: { label: "Reminder", dot: "bg-[#ec8017]", panel: "bg-[#fff7ed]", icon: "⏰" },
     new_content: { label: "New content", dot: "bg-[#1675ed]", panel: "bg-[#f2f8ff]", icon: "✦" },
@@ -1570,7 +1587,7 @@ function QuizAttempt({ quiz, online, studentId, onClose }) {
   const answered = answers.filter((answer) => String(answer || "").trim()).length;
   async function submit(event) {
     event.preventDefault();
-    const payload = { lectureId: quiz._id, answers };
+    const payload = { lectureId: quiz._id, lectureVersion: quiz.version, answers, clientSyncId: crypto.randomUUID() };
     const pendingKey = studentId ? `vidya_setu_queue_v2:${studentId}:quiz:${quiz._id}` : "";
     if (!online) {
       if (!pendingKey) return setMessage("Your session is still loading. Please try again.");
@@ -1593,7 +1610,12 @@ function QuizAttempt({ quiz, online, studentId, onClose }) {
       return;
     }
     if (!response.ok) {
-      setMessage(data.error || "Quiz could not be submitted");
+      if (response.status === 409) {
+        localStorage.removeItem(pendingKey);
+        setMessage(`${data.error || "Quiz changed."} Refresh the page and review the latest quiz.`);
+      } else {
+        setMessage(data.error || "Quiz could not be submitted");
+      }
       return;
     }
     setResult(data.attempt);
