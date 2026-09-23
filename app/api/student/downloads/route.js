@@ -21,7 +21,8 @@ export async function POST(request) {
   const student = await db.collection("students").findOne({ studentId });
   const lecture = await db.collection("lectures").findOne({ _id: new ObjectId(lectureId), assignedStandards: student?.standard, assignedDivisions: student?.division, "resources.fileId": new ObjectId(fileId) });
   if (!lecture) return NextResponse.json({ error: "File is not assigned to this student." }, { status: 403 });
-  const update = { studentId, lectureId: lecture._id, fileId: new ObjectId(fileId), filename: String(filename), progress: Math.max(0, Math.min(100, Number(progress))), bytesReceived: Number(bytesReceived), totalBytes: Number(totalBytes), completed: Boolean(completed), updatedAt: new Date() };
+  const resource = lecture.resources?.find((item) => item.fileId?.toString() === fileId);
+  const update = { studentId, lectureId: lecture._id, lectureVersion: Number(lecture.version || 1), lectureVersionId: lecture.versionId || null, resourceVersion: Number(resource?.version || lecture.version || 1), resourceVersionId: resource?.versionId || lecture.versionId || null, fileId: new ObjectId(fileId), filename: String(filename), progress: Math.max(0, Math.min(100, Number(progress))), bytesReceived: Number(bytesReceived), totalBytes: Number(totalBytes), completed: Boolean(completed), updatedAt: new Date() };
   await db.collection("downloads").updateOne({ studentId, fileId: new ObjectId(fileId) }, { $set: update, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
   if (update.completed) {
     await upsertNotifications(db, [{

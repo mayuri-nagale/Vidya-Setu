@@ -28,7 +28,7 @@ export async function POST(request) {
   const results = lecture.quiz.map((question, index) => ({ question: question.question, selectedAnswer: answers[index] ?? null, correctAnswer: question.correctAnswer, correct: String(answers[index] ?? "") === String(question.correctAnswer), points: Number(question.points || 1) }));
   const score = results.reduce((sum, result) => sum + (result.correct ? result.points : 0), 0);
   const totalPoints = results.reduce((sum, result) => sum + result.points, 0);
-  const attempt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, score, totalPoints, percentage: totalPoints ? Math.round((score / totalPoints) * 100) : 0, results, submittedAt: new Date() };
+  const attempt = { studentId, studentName: student.name, lectureId: lecture._id, lectureVersion: Number(lecture.version || 1), lectureVersionId: lecture.versionId || null, teacherId: lecture.teacherId, score, totalPoints, percentage: totalPoints ? Math.round((score / totalPoints) * 100) : 0, results, submittedAt: new Date() };
   await db.collection("quizAttempts").updateOne({ studentId, lectureId: lecture._id }, { $set: attempt }, { upsert: true });
   await upsertNotifications(db, [
     {

@@ -36,8 +36,17 @@ export async function POST(request) {
     const existing = await db.collection("doubts").findOne({ studentId, clientSyncId });
     if (existing) return NextResponse.json({ doubt: { ...existing, _id: existing._id.toString(), lectureId: existing.lectureId.toString() } });
   }
-  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], ...(clientSyncId ? { clientSyncId } : {}), createdAt: new Date() };
-  const result = await db.collection("doubts").insertOne(doubt);
+  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, lectureVersion: Number(lecture.version || 1), lectureVersionId: lecture.versionId || null, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], ...(clientSyncId ? { clientSyncId } : {}), createdAt: new Date() };
+  let result;
+  try {
+    result = await db.collection("doubts").insertOne(doubt);
+  } catch (error) {
+    if (clientSyncId && error?.code === 11000) {
+      const existing = await db.collection("doubts").findOne({ studentId, clientSyncId });
+      if (existing) return NextResponse.json({ doubt: { ...existing, _id: existing._id.toString(), lectureId: existing.lectureId.toString() } });
+    }
+    throw error;
+  }
   await upsertNotifications(db, [{
     eventKey: `doubt:${result.insertedId}:teacher`,
     recipientRole: "teacher",

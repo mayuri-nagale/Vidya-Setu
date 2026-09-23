@@ -4,11 +4,26 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import NearbyShareLauncher from "./NearbyShareLauncher";
 
-function readPendingItems(key) {
+const QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const RESOURCE_CACHE = "vidya-setu-offline-resources-v1";
+
+function queueKey(studentId, type) {
+  return `vidya_setu_queue_v2:${studentId}:${type}`;
+}
+
+function readPendingItems(key, isValid) {
   try {
     const value = JSON.parse(localStorage.getItem(key) || "[]");
-    return Array.isArray(value) ? value : [];
+    if (!Array.isArray(value)) return [];
+    const valid = value.filter((item) => isValid(item) && Date.now() - new Date(item.queuedAt).getTime() < QUEUE_MAX_AGE_MS);
+    const review = value.filter((item) => !valid.includes(item));
+    if (review.length) localStorage.setItem(`${key}:review`, JSON.stringify(review));
+    if (review.length) savePendingItems(key, valid);
+    return valid;
   } catch {
+    const raw = localStorage.getItem(key);
+    if (raw) localStorage.setItem(`${key}:review`, raw);
+    localStorage.removeItem(key);
     return [];
   }
 }
@@ -24,6 +39,29 @@ function readQueuedPayload(key) {
   } catch {
     return null;
   }
+}
+
+function queuePayload(payload) {
+  return { ...payload, queuedAt: new Date().toISOString(), queueId: crypto.randomUUID() };
+}
+
+function cachedResourceRequest(file) {
+  return new Request(`/__vidya_setu_offline__/${file.fileId}?version=${encodeURIComponent(file.versionId || file.version || "current")}`);
+}
+
+async function cacheResource(file, blob) {
+  if (!("caches" in window)) return false;
+  const cache = await caches.open(RESOURCE_CACHE);
+  await cache.put(cachedResourceRequest(file), new Response(blob, { headers: { "Content-Type": file.mimeType || blob.type || "application/octet-stream" } }));
+  return true;
+}
+
+async function getCachedResourceUrl(file) {
+  if (!("caches" in window)) return "";
+  const cache = await caches.open(RESOURCE_CACHE);
+  const response = await cache.match(cachedResourceRequest(file));
+  if (!response) return "";
+  return URL.createObjectURL(await response.blob());
 }
 
 function Icon({ type }) {
@@ -172,7 +210,7 @@ export default function StudentLiveDashboard() {
   }, []);
 
   useEffect(() => {
-    if (!online) return;
+    if (!online || !student?.studentId) return;
     let cancelled = false;
     let retryTimer;
 
@@ -191,32 +229,46 @@ export default function StudentLiveDashboard() {
 
     async function syncPendingWork() {
       setSyncState("syncing");
-      const pendingDoubts = readPendingItems("vidya_setu_pending_doubts");
+      const pendingDoubtsKey = queueKey(student.studentId, "doubts");
+      const pendingDoubts = readPendingItems(
+        pendingDoubtsKey,
+        (item) => item && typeof item.lectureId === "string" && typeof item.question === "string" && typeof item.clientSyncId === "string" && item.clientSyncId.length > 0 && !Number.isNaN(new Date(item.queuedAt).getTime()),
+      );
       const doubtResults = await Promise.all(
         pendingDoubts.map((item) => postQueuedItem("/api/student/doubts", item)),
       );
       const remainingDoubts = pendingDoubts.filter((_, index) => !doubtResults[index]);
-      savePendingItems("vidya_setu_pending_doubts", remainingDoubts);
+      savePendingItems(pendingDoubtsKey, remainingDoubts);
 
       const pendingQuizKeys = Object.keys(localStorage).filter((key) =>
-        key.startsWith("vidya_setu_quiz_"),
+        key.startsWith(`vidya_setu_queue_v2:${student.studentId}:quiz:`),
       );
       const quizResults = await Promise.all(
         pendingQuizKeys.map((key) => {
           const payload = readQueuedPayload(key);
-          return payload ? postQueuedItem("/api/student/quizzes", payload) : Promise.resolve(false);
+          const valid = payload && typeof payload.lectureId === "string" && Array.isArray(payload.answers) && !Number.isNaN(new Date(payload.queuedAt).getTime()) && Date.now() - new Date(payload.queuedAt).getTime() < QUEUE_MAX_AGE_MS;
+          if (!valid) {
+            localStorage.setItem(`${key}:review`, JSON.stringify(payload));
+            localStorage.removeItem(key);
+            return Promise.resolve(true);
+          }
+          return postQueuedItem("/api/student/quizzes", payload);
         }),
       );
       pendingQuizKeys.forEach((key, index) => {
         if (quizResults[index]) localStorage.removeItem(key);
       });
 
-      const pendingDownloads = readPendingItems("vidya_setu_pending_downloads");
+      const pendingDownloadsKey = queueKey(student.studentId, "downloads");
+      const pendingDownloads = readPendingItems(
+        pendingDownloadsKey,
+        (item) => item && typeof item.lectureId === "string" && typeof item.fileId === "string" && typeof item.filename === "string" && !Number.isNaN(new Date(item.queuedAt).getTime()),
+      );
       const downloadResults = await Promise.all(
         pendingDownloads.map((item) => postQueuedItem("/api/student/downloads", item)),
       );
       const remainingDownloads = pendingDownloads.filter((_, index) => !downloadResults[index]);
-      savePendingItems("vidya_setu_pending_downloads", remainingDownloads);
+      savePendingItems(pendingDownloadsKey, remainingDownloads);
 
       if (cancelled) return;
       const hasPendingWork = remainingDoubts.length || remainingDownloads.length || quizResults.some((result) => !result);
@@ -235,7 +287,7 @@ export default function StudentLiveDashboard() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [online, syncAttempt]);
+  }, [online, student?.studentId, syncAttempt]);
 
   const chapters = useMemo(
     () =>
@@ -470,7 +522,11 @@ export default function StudentLiveDashboard() {
         <OfflineResourceModal
           resource={resource}
           online={online}
-          onClose={() => setResource(null)}
+          studentId={student?.studentId}
+          onClose={() => {
+            if (resource.localUrl) URL.revokeObjectURL(resource.localUrl);
+            setResource(null);
+          }}
           onSent={(doubt) => setDoubts((current) => [doubt, ...current])}
         />
       )}
@@ -478,6 +534,7 @@ export default function StudentLiveDashboard() {
         <QuizAttempt
           quiz={activeQuiz}
           online={online}
+          studentId={student?.studentId}
           onClose={() => setActiveQuiz(null)}
         />
       )}
@@ -513,31 +570,30 @@ export default function StudentLiveDashboard() {
         { fileId: item.fileId, progress, completed, bytesReceived, totalBytes },
       ]);
     } catch {
-      const pending = JSON.parse(
-        localStorage.getItem("vidya_setu_pending_downloads") || "[]",
-      );
+      if (!student?.studentId) return;
+      const pendingKey = queueKey(student.studentId, "downloads");
+      const pending = readPendingItems(pendingKey, () => true);
       const next = [
         ...pending.filter((download) => download.fileId !== item.fileId),
-        payload,
+        queuePayload(payload),
       ];
-      localStorage.setItem(
-        "vidya_setu_pending_downloads",
-        JSON.stringify(next),
-      );
+      savePendingItems(pendingKey, next);
       setSavedDownloads((current) => [
         ...current.filter((download) => download.fileId !== item.fileId),
         { fileId: item.fileId, progress, completed, bytesReceived, totalBytes },
       ]);
     }
   }
-  function openResource(item) {
-    if (item.lectureId)
+  async function openResource(item) {
+    const localUrl = await getCachedResourceUrl(item).catch(() => "");
+    if (!online && !localUrl) return;
+    if (online && item.lectureId)
       fetch("/api/student/views", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lectureId: item.lectureId }),
       });
-    setResource(item);
+    setResource({ ...item, localUrl });
   }
 }
 
@@ -995,10 +1051,10 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
   async function download(file) {
     setActiveDownload(file.fileId);
     setStatus(`Downloading ${file.filename}...`);
-    const start = file.bytesReceived || 0;
+    const start = 0;
     try {
       const response = await fetch(`/api/teacher/files/${file.fileId}`, {
-        headers: start ? { Range: `bytes=${start}-` } : {},
+        headers: {},
       });
       if (!response.ok || !response.body)
         throw new Error("Download unavailable");
@@ -1025,6 +1081,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
         type:
           response.headers.get("content-type") || "application/octet-stream",
       });
+      await cacheResource(file, blob);
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = file.filename;
@@ -1034,7 +1091,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
       setStatus(`${file.filename} downloaded`);
     } catch {
       setStatus(
-        `${file.filename} paused. Resume will continue from ${file.progress}%`,
+        `${file.filename} paused. Retry will restart the file safely.`,
       );
     } finally {
       setActiveDownload("");
@@ -1054,7 +1111,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
         <div className="flex items-start gap-3">
           <button
             type="button"
-            onClick={() => online && openResource(resourceItem)}
+            onClick={() => (online || file.completed) && openResource(resourceItem)}
             className="shrink-0 text-left"
           >
             <ResourceCover file={file} />
@@ -1063,7 +1120,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
             <div className="flex items-start justify-between gap-2">
               <button
                 type="button"
-                onClick={() => online && openResource(resourceItem)}
+                onClick={() => (online || file.completed) && openResource(resourceItem)}
                 className="truncate text-left text-sm font-bold hover:text-[#155db2]"
               >
                 {file.title}
@@ -1110,7 +1167,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
                   : activeDownload === file.fileId
                     ? "Downloading..."
                     : file.progress
-                      ? `Resume from ${file.progress}%`
+                      ? "Restart download"
                       : "Download"}
               </button>
               {!complete && (
@@ -1503,7 +1560,7 @@ function QuizLibrary({ quizzes, onAttempt }) {
   );
 }
 
-function QuizAttempt({ quiz, online, onClose }) {
+function QuizAttempt({ quiz, online, studentId, onClose }) {
   const [answers, setAnswers] = useState(
     quiz.attempt?.results?.map((result) => result.selectedAnswer) ||
       Array(quiz.questions.length).fill(""),
@@ -1514,8 +1571,10 @@ function QuizAttempt({ quiz, online, onClose }) {
   async function submit(event) {
     event.preventDefault();
     const payload = { lectureId: quiz._id, answers };
+    const pendingKey = studentId ? `vidya_setu_queue_v2:${studentId}:quiz:${quiz._id}` : "";
     if (!online) {
-      localStorage.setItem(`vidya_setu_quiz_${quiz._id}`, JSON.stringify(payload));
+      if (!pendingKey) return setMessage("Your session is still loading. Please try again.");
+      localStorage.setItem(pendingKey, JSON.stringify(queuePayload(payload)));
       setMessage("Attempt saved offline. It will sync when internet returns.");
       return;
     }
@@ -1529,7 +1588,7 @@ function QuizAttempt({ quiz, online, onClose }) {
       });
       data = await response.json();
     } catch {
-      localStorage.setItem(`vidya_setu_quiz_${quiz._id}`, JSON.stringify(payload));
+      if (pendingKey) localStorage.setItem(pendingKey, JSON.stringify(queuePayload(payload)));
       setMessage("Internet dropped. Your attempt is saved and will sync automatically.");
       return;
     }
@@ -1694,19 +1753,22 @@ function StudentDoubts({ doubts }) {
   );
 }
 
-function OfflineResourceModal({ resource, online, onClose, onSent }) {
+function OfflineResourceModal({ resource, online, studentId, onClose, onSent }) {
   const videoRef = useRef(null);
   const [showAsk, setShowAsk] = useState(false);
   const [timestamp, setTimestamp] = useState(0);
   const [pageNumber, setPageNumber] = useState("");
   const [question, setQuestion] = useState("");
   const [message, setMessage] = useState("");
-  const url = resource.fileId ? `/api/teacher/files/${resource.fileId}` : "";
+  const url = resource.localUrl || (resource.fileId ? `/api/teacher/files/${resource.fileId}` : "");
   function queueDoubt(payload) {
-    savePendingItems("vidya_setu_pending_doubts", [
-      ...readPendingItems("vidya_setu_pending_doubts"),
-      payload,
+    if (!studentId) return false;
+    const key = queueKey(studentId, "doubts");
+    savePendingItems(key, [
+      ...readPendingItems(key, () => true),
+      queuePayload(payload),
     ]);
+    return true;
   }
   async function submit(event) {
     event.preventDefault();
@@ -1718,7 +1780,7 @@ function OfflineResourceModal({ resource, online, onClose, onSent }) {
       clientSyncId: crypto.randomUUID(),
     };
     if (!online) {
-      queueDoubt(payload);
+      if (!queueDoubt(payload)) return setMessage("Your session is still loading. Please try again.");
       setMessage(
         "Saved offline. It will send automatically when internet returns.",
       );
@@ -1735,7 +1797,7 @@ function OfflineResourceModal({ resource, online, onClose, onSent }) {
       });
       result = await response.json();
     } catch {
-      queueDoubt(payload);
+      if (!queueDoubt(payload)) return setMessage("Your session is still loading. Please try again.");
       setMessage("Internet dropped. Your doubt is saved and will send automatically.");
       setQuestion("");
       return;

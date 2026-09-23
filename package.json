@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "seed:teacher": "node scripts/seed-teacher.mjs",
-    "backfill:notifications": "node scripts/backfill-notifications.mjs"
+    "backfill:notifications": "node scripts/backfill-notifications.mjs",
+    "backfill:learning-versions": "node scripts/backfill-learning-versions.mjs"
   },
   "dependencies": {
     "mongodb": "^7.6.0",

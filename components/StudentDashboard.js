@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import StudentLiveDashboard from "./StudentLiveDashboard";
 
 const subjects = [
   { name: "Mathematics", teacher: "Ms. Sharma", chapters: [{ name: "Real Numbers", resources: "2 videos · 3 PPTs · 1 quiz", progress: 82 }, { name: "Polynomials", resources: "1 video · 4 PPTs · 1 quiz", progress: 46 }] },
@@ -19,7 +20,7 @@ function Icon({ type }) {
   return <span aria-hidden="true" className="text-lg leading-none">{icons[type] || "•"}</span>;
 }
 
-export default function StudentDashboard() {
+export function LegacyStudentDashboard() {
   const [activeNav, setActiveNav] = useState("home");
   const [openSubject, setOpenSubject] = useState("Mathematics");
   const [showDoubt, setShowDoubt] = useState(false);
@@ -65,6 +66,9 @@ export default function StudentDashboard() {
     </div>{showDoubt && <DoubtModal video={selectedVideo} onClose={() => setShowDoubt(false)} onSend={() => { setShowDoubt(false); notify("Timestamped doubt sent to your mam"); }} />}{toast && <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl bg-[#173b35] px-5 py-3 text-sm font-semibold text-white shadow-xl">{toast}</div>}</main>
   );
 }
+
+// Kept as a compatibility entry point only. All imports receive the live dashboard.
+export default StudentLiveDashboard;
 
 function NavButton({ active, onClick, icon, label, badge }) { return <button onClick={onClick} className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-sm font-semibold transition ${active ? "bg-[#e7f2eb] text-[#1d5148]" : "text-[#81918a] hover:bg-[#f4f7f2] hover:text-[#1d5148]"}`}><span className="flex items-center gap-3"><Icon type={icon} />{label}</span>{badge && <span className="rounded-full bg-[#f5c86b] px-2 py-0.5 text-[10px] text-[#6f541c]">{badge}</span>}</button>; }
 
