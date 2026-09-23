@@ -38,7 +38,7 @@ export default function HomePage() {
         <div className="flex w-full min-h-[720px] flex-col bg-[#0f4d47] p-8 text-white md:w-1/2 md:p-12">
           <div className="mb-12 flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#f5c86b] text-xl font-bold text-[#173b35]">V</div>
-            <span className="text-2xl font-semibold tracking-tight">vidya setu</span>
+            <span className="text-2xl font-semibold tracking-tight text-blue-100">vidya setu</span>
           </div>
 
           <div className="mt-12 flex flex-1 flex-col justify-center">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { GridFSBucket } from "mongodb";
 import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../lib/auth";
 
@@ -47,6 +48,7 @@ export async function POST(request) {
   try { quiz = JSON.parse(String(form.get("quiz") || "[]")); } catch { return NextResponse.json({ error: "Quiz data is invalid." }, { status: 400 }); }
   if (!Array.isArray(quiz)) return NextResponse.json({ error: "Quiz data is invalid." }, { status: 400 });
   const lecture = {
+    lectureId: `lec_${randomUUID().replaceAll("-", "").slice(0, 8)}`,
     teacherId,
     assignedStandards: [assignedStandard],
     assignedDivisions: [assignedDivision],
@@ -57,6 +59,12 @@ export async function POST(request) {
     quiz,
     resources,
     version: 1,
+    versionId: `v_${randomUUID().replaceAll("-", "").slice(0, 10)}`,
+    status: "Published",
+    verification: "Verified",
+    publishedAt: new Date(),
+    versionHistory: [],
+    corrections: [],
     createdAt: new Date(),
     updatedAt: new Date(),
   };

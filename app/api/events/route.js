@@ -14,13 +14,14 @@ function timestamp(value) {
 async function getStudentFingerprint(db, studentId) {
   const student = await db.collection("students").findOne({ studentId }, { projection: { standard: 1, division: 1 } });
   if (!student) return "missing";
-  const [lecture, doubt, download, attempt] = await Promise.all([
+  const [lecture, doubt, download, attempt, reminder] = await Promise.all([
     db.collection("lectures").find({ assignedStandards: student.standard, assignedDivisions: student.division }).sort({ updatedAt: -1 }).limit(1).next(),
     db.collection("doubts").find({ studentId }).sort({ updatedAt: -1, createdAt: -1 }).limit(1).next(),
     db.collection("downloads").find({ studentId }).sort({ updatedAt: -1 }).limit(1).next(),
     db.collection("quizAttempts").find({ studentId }).sort({ submittedAt: -1 }).limit(1).next(),
+    db.collection("lectureReminders").find({ studentIds: studentId }).sort({ sentAt: -1 }).limit(1).next(),
   ]);
-  return JSON.stringify([timestamp(lecture?.updatedAt), timestamp(doubt?.updatedAt || doubt?.createdAt), timestamp(download?.updatedAt), timestamp(attempt?.submittedAt)]);
+  return JSON.stringify([timestamp(lecture?.updatedAt), timestamp(doubt?.updatedAt || doubt?.createdAt), timestamp(download?.updatedAt), timestamp(attempt?.submittedAt), timestamp(reminder?.updatedAt || reminder?.sentAt)]);
 }
 
 async function getTeacherFingerprint(db, teacherId) {

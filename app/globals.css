@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #eef3f8;
+  --foreground: #172b4d;
+  --ink: #172b4d;
+  --muted: #6d7f99;
+  --line: #dce5ef;
+  --panel: #ffffff;
+  --brand: #1464d2;
 }
 
 @theme inline {
@@ -23,4 +28,132 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), sans-serif;
+}
+
+body {
+  background-image: linear-gradient(135deg, #f7f9fc 0%, #eef3f8 52%, #e8f0f8 100%);
+}
+
+.app-shell {
+  letter-spacing: 0;
+}
+
+.app-sidebar {
+  background: #102a4a !important;
+  border-color: #1d4165 !important;
+  color: #eef6ff;
+  box-shadow: 14px 0 30px rgb(21 53 86 / 8%);
+}
+
+.app-sidebar nav button {
+  color: #a9bdd4 !important;
+}
+
+.app-sidebar nav button:hover,
+.app-sidebar nav button[class*="bg-[#e3efff]"],
+.app-sidebar nav button[class*="bg-[#e7f2eb]"] {
+  background: #1b4773 !important;
+  color: #ffffff !important;
+}
+
+.workspace-panel {
+  border: 1px solid var(--line);
+  background: rgb(255 255 255 / 92%);
+  box-shadow: 0 12px 30px rgb(32 69 106 / 7%);
+}
+
+.workspace-card {
+  border-color: var(--line) !important;
+  box-shadow: 0 8px 22px rgb(32 69 106 / 5%);
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.workspace-card:hover {
+  border-color: #b9cde2 !important;
+  box-shadow: 0 14px 30px rgb(32 69 106 / 10%);
+  transform: translateY(-2px);
+}
+
+.chapter-label {
+  color: #2869a9;
+  font-weight: 700;
+}
+
+.teacher-shell,
+.student-shell {
+  background: #f3f7fc !important;
+}
+
+.student-shell {
+  color: #172b4d !important;
+}
+
+.student-shell [class*="bg-[#f4f7f2]"],
+.student-shell [class*="bg-[#fbfcfa]"],
+.student-shell [class*="bg-[#f7faf7]"] {
+  background: #f7faff !important;
+}
+
+.student-shell [class*="bg-[#e7f2eb]"],
+.student-shell [class*="bg-[#e2f7ee]"] {
+  background: #e6f0ff !important;
+  color: #155db2 !important;
+}
+
+.student-shell [class*="border-[#dfe9e1]"],
+.student-shell [class*="border-[#e5ede7]"],
+.teacher-shell [class*="border-[#dce8f7]"] {
+  border-color: #d8e3ef !important;
+}
+
+.student-shell [class*="text-[#173b35]"],
+.student-shell [class*="text-[#1d5148]"] {
+  color: #172b4d !important;
+}
+
+.student-shell [class*="bg-[#1d5148]"] {
+  background: #155db2 !important;
+}
+
+.student-shell [class*="bg-[#f5c86b]"] {
+  background: #2f83df !important;
+  color: #ffffff !important;
+}
+
+.teacher-shell section,
+.student-shell section {
+  border-radius: 14px;
+}
+
+.teacher-shell button[class*="bg-[#1675ed]"],
+.teacher-shell button[class*="bg-[#e5f0ff]"],
+.student-shell button[class*="bg-[#1d5148]"],
+.student-shell button[class*="bg-[#e7f2eb]"] {
+  border-radius: 9px;
+}
+
+.teacher-shell header,
+.student-shell header {
+  background: rgb(243 247 252 / 86%);
+}
+
+.professional-modal {
+  border: 1px solid #d4e0ec;
+  box-shadow: 0 28px 80px rgb(15 42 72 / 22%);
+}
+
+button,
+a {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+}
+
+button:active,
+a:active {
+  transform: translateY(1px);
+}
+
+/* Keep these teacher-only navigation items out of the sidebar. */
+aside nav button:nth-child(5),
+aside nav button:nth-child(9) {
+  display: none;
 }
