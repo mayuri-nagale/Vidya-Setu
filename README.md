@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Vidya Setu
 
-## Getting Started
+Vidya Setu is a teacher-and-student learning portal built with Next.js and MongoDB. Teachers publish lessons and resources; students access them, download learning material, ask doubts, take quizzes, receive updates, and share verified downloads with classmates on the same Wi-Fi or hotspot.
 
-First, run the development server:
+## Prerequisites
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- Node.js 20.9 or later
+- MongoDB Community Server, or a MongoDB Atlas connection string
+- Git
+
+## Run from a fresh clone
+
+```powershell
+git clone https://github.com/mayuri-nagale/Vidya-Setu.git
+cd Vidya-Setu
+npm ci
+Copy-Item .env.local.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+If `npm ci` does not work, run `npm install`.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+Set `.env.local` for local MongoDB:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DB=vidya_setu
+SESSION_SECRET=any-long-private-random-string
+```
 
-## Learn More
+Start MongoDB. On Windows, when installed as a service, use an elevated PowerShell:
 
-To learn more about Next.js, take a look at the following resources:
+```powershell
+Start-Service MongoDB
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+If it is not installed as a service, start it in another terminal with:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```powershell
+New-Item -ItemType Directory -Force C:\data\db
+mongod --dbpath C:\data\db
+```
 
-## Deploy on Vercel
+Then create demo data and run the app:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```powershell
+npm run seed:teacher
+npm run dev
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000).
+
+| Role | Page | ID | Password |
+| --- | --- | --- | --- |
+| Teacher | `/teacher` | `TCH-001` | `teacher123` |
+| Student | `/student` | `101` | `student123` |
+
+Students `102` to `110` also use password `student123`.
+
+## Cloud DB (optional)
+
+Replace `MONGODB_URI` in `.env.local` with the hosted connection string, then restart the app. Allow the application IP address in your database provider.
+
+## Verify
+
+1. Log in as the teacher and publish a lesson for **Class 10 / 10A**.
+2. Log in as student `101` and confirm the lesson appears.
+3. Update the lesson version as the teacher and check the student **Updates** section.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start development server |
+| `npm run lint` | Run ESLint |
+| `npm run build` | Create a production build |
+| `npm start` | Run the production build after `npm run build` |
