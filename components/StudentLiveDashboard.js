@@ -4,6 +4,28 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import NearbyShareLauncher from "./NearbyShareLauncher";
 
+function readPendingItems(key) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePendingItems(key, items) {
+  if (items.length) localStorage.setItem(key, JSON.stringify(items));
+  else localStorage.removeItem(key);
+}
+
+function readQueuedPayload(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "");
+  } catch {
+    return null;
+  }
+}
+
 function Icon({ type }) {
   const icons = {
     home: "⌂",
@@ -72,6 +94,8 @@ export default function StudentLiveDashboard() {
   const [quizzes, setQuizzes] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [reminderUpdates, setReminderUpdates] = useState([]);
+  const [syncAttempt, setSyncAttempt] = useState(0);
+  const [dataRefresh, setDataRefresh] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -127,12 +151,13 @@ export default function StudentLiveDashboard() {
       events.close();
       window.clearInterval(timer);
     };
-  }, []);
+  }, [dataRefresh]);
 
   useEffect(() => {
     const handleOnline = () => {
       setOnline(true);
-      setSyncState("online");
+      setSyncState("syncing");
+      setSyncAttempt((current) => current + 1);
     };
     window.addEventListener("online", handleOnline);
     const handleOffline = () => {
@@ -148,72 +173,69 @@ export default function StudentLiveDashboard() {
 
   useEffect(() => {
     if (!online) return;
-    const pending = JSON.parse(
-      localStorage.getItem("vidya_setu_pending_doubts") || "[]",
-    );
-    if (!pending.length) return;
-    Promise.all(
-      pending.map((item) =>
-        fetch("/api/student/doubts", {
+    let cancelled = false;
+    let retryTimer;
+
+    async function postQueuedItem(path, payload) {
+      try {
+        const response = await fetch(path, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(item),
-        }).then((response) => (response.ok ? response.json() : null)),
-      ),
-    ).then((results) => {
-      const sent = results.filter(Boolean);
-      if (sent.length) {
-        setDoubts((current) => [
-          ...sent.map((result) => result.doubt),
-          ...current,
-        ]);
-        localStorage.removeItem("vidya_setu_pending_doubts");
+          body: JSON.stringify(payload),
+        });
+        return response.ok;
+      } catch {
+        return false;
       }
+    }
+
+    async function syncPendingWork() {
+      setSyncState("syncing");
+      const pendingDoubts = readPendingItems("vidya_setu_pending_doubts");
+      const doubtResults = await Promise.all(
+        pendingDoubts.map((item) => postQueuedItem("/api/student/doubts", item)),
+      );
+      const remainingDoubts = pendingDoubts.filter((_, index) => !doubtResults[index]);
+      savePendingItems("vidya_setu_pending_doubts", remainingDoubts);
+
+      const pendingQuizKeys = Object.keys(localStorage).filter((key) =>
+        key.startsWith("vidya_setu_quiz_"),
+      );
+      const quizResults = await Promise.all(
+        pendingQuizKeys.map((key) => {
+          const payload = readQueuedPayload(key);
+          return payload ? postQueuedItem("/api/student/quizzes", payload) : Promise.resolve(false);
+        }),
+      );
+      pendingQuizKeys.forEach((key, index) => {
+        if (quizResults[index]) localStorage.removeItem(key);
+      });
+
+      const pendingDownloads = readPendingItems("vidya_setu_pending_downloads");
+      const downloadResults = await Promise.all(
+        pendingDownloads.map((item) => postQueuedItem("/api/student/downloads", item)),
+      );
+      const remainingDownloads = pendingDownloads.filter((_, index) => !downloadResults[index]);
+      savePendingItems("vidya_setu_pending_downloads", remainingDownloads);
+
+      if (cancelled) return;
+      const hasPendingWork = remainingDoubts.length || remainingDownloads.length || quizResults.some((result) => !result);
+      setDataRefresh((current) => current + 1);
+      if (hasPendingWork) {
+        retryTimer = window.setTimeout(() => setSyncAttempt((current) => current + 1), 15000);
+      } else {
+        setSyncState("online");
+      }
+    }
+
+    syncPendingWork().catch(() => {
+      if (!cancelled) retryTimer = window.setTimeout(() => setSyncAttempt((current) => current + 1), 15000);
     });
-  }, [online]);
-
-  useEffect(() => {
-    if (!online) return;
-    const pending = Object.keys(localStorage).filter((key) =>
-      key.startsWith("vidya_setu_quiz_"),
-    );
-    if (!pending.length) return;
-    Promise.all(
-      pending.map((key) =>
-        fetch("/api/student/quizzes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: localStorage.getItem(key),
-        }).then((response) => (response.ok ? key : null)),
-      ),
-    )
-      .then((keys) =>
-        keys.filter(Boolean).forEach((key) => localStorage.removeItem(key)),
-      )
-      .catch(() => {});
-  }, [online]);
-
-  useEffect(() => {
-    if (!online) return;
-    const pending = JSON.parse(
-      localStorage.getItem("vidya_setu_pending_downloads") || "[]",
-    );
-    if (!pending.length) return;
-    Promise.all(
-      pending.map((item) =>
-        fetch("/api/student/downloads", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(item),
-        }).then((response) => response.ok),
-      ),
-    )
-      .then((results) => {
-        if (results.every(Boolean))
-          localStorage.removeItem("vidya_setu_pending_downloads");
-      })
-      .catch(() => {});
-  }, [online]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [online, syncAttempt]);
 
   const chapters = useMemo(
     () =>
@@ -1493,19 +1515,24 @@ function QuizAttempt({ quiz, online, onClose }) {
     event.preventDefault();
     const payload = { lectureId: quiz._id, answers };
     if (!online) {
-      localStorage.setItem(
-        `vidya_setu_quiz_${quiz._id}`,
-        JSON.stringify(payload),
-      );
+      localStorage.setItem(`vidya_setu_quiz_${quiz._id}`, JSON.stringify(payload));
       setMessage("Attempt saved offline. It will sync when internet returns.");
       return;
     }
-    const response = await fetch("/api/student/quizzes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await response.json();
+    let response;
+    let data;
+    try {
+      response = await fetch("/api/student/quizzes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      data = await response.json();
+    } catch {
+      localStorage.setItem(`vidya_setu_quiz_${quiz._id}`, JSON.stringify(payload));
+      setMessage("Internet dropped. Your attempt is saved and will sync automatically.");
+      return;
+    }
     if (!response.ok) {
       setMessage(data.error || "Quiz could not be submitted");
       return;
@@ -1675,6 +1702,12 @@ function OfflineResourceModal({ resource, online, onClose, onSent }) {
   const [question, setQuestion] = useState("");
   const [message, setMessage] = useState("");
   const url = resource.fileId ? `/api/teacher/files/${resource.fileId}` : "";
+  function queueDoubt(payload) {
+    savePendingItems("vidya_setu_pending_doubts", [
+      ...readPendingItems("vidya_setu_pending_doubts"),
+      payload,
+    ]);
+  }
   async function submit(event) {
     event.preventDefault();
     const payload = {
@@ -1682,27 +1715,31 @@ function OfflineResourceModal({ resource, online, onClose, onSent }) {
       question,
       timestampSeconds: timestamp,
       pageNumber,
+      clientSyncId: crypto.randomUUID(),
     };
     if (!online) {
-      const queued = JSON.parse(
-        localStorage.getItem("vidya_setu_pending_doubts") || "[]",
-      );
-      localStorage.setItem(
-        "vidya_setu_pending_doubts",
-        JSON.stringify([...queued, payload]),
-      );
+      queueDoubt(payload);
       setMessage(
         "Saved offline. It will send automatically when internet returns.",
       );
       setQuestion("");
       return;
     }
-    const response = await fetch("/api/student/doubts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const result = await response.json();
+    let response;
+    let result;
+    try {
+      response = await fetch("/api/student/doubts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      result = await response.json();
+    } catch {
+      queueDoubt(payload);
+      setMessage("Internet dropped. Your doubt is saved and will send automatically.");
+      setQuestion("");
+      return;
+    }
     if (!response.ok) {
       setMessage(result.error || "Doubt could not be sent");
       return;

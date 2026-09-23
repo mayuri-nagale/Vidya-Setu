@@ -31,7 +31,12 @@ export async function POST(request) {
   if (!ObjectId.isValid(body.lectureId)) return NextResponse.json({ error: "Invalid lecture." }, { status: 400 });
   const lecture = await db.collection("lectures").findOne({ _id: new ObjectId(body.lectureId), assignedStandards: student?.standard, assignedDivisions: student?.division });
   if (!lecture) return NextResponse.json({ error: "Lecture is not assigned to this student." }, { status: 403 });
-  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], createdAt: new Date() };
+  const clientSyncId = String(body.clientSyncId || "").trim().slice(0, 128);
+  if (clientSyncId) {
+    const existing = await db.collection("doubts").findOne({ studentId, clientSyncId });
+    if (existing) return NextResponse.json({ doubt: { ...existing, _id: existing._id.toString(), lectureId: existing.lectureId.toString() } });
+  }
+  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], ...(clientSyncId ? { clientSyncId } : {}), createdAt: new Date() };
   const result = await db.collection("doubts").insertOne(doubt);
   await upsertNotifications(db, [{
     eventKey: `doubt:${result.insertedId}:teacher`,
