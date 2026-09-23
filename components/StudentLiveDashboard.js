@@ -6,7 +6,13 @@ import NearbyShareLauncher from "./NearbyShareLauncher";
 
 const QUEUE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const RESOURCE_CACHE = "vidya-setu-offline-resources-v1";
+const RESOURCE_DATABASE = "vidya-setu-offline-resources-v1";
+const RESOURCE_STORE = "files";
 const NOTIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+function hasInternetConnection(online) {
+  return online && (typeof navigator === "undefined" || navigator.onLine);
+}
 
 function isRecentNotification(value) {
   const timestamp = new Date(value).getTime();
@@ -51,23 +57,146 @@ function queuePayload(payload) {
   return { ...payload, queuedAt: new Date().toISOString(), queueId: crypto.randomUUID() };
 }
 
-function cachedResourceRequest(file) {
-  return new Request(`/__vidya_setu_offline__/${file.fileId}?version=${encodeURIComponent(file.versionId || file.version || "current")}`);
+function resourceStorageVersion(file) {
+  return file.versionId || file.lecture?.versionId || file.version || file.lecture?.version || "current";
+}
+
+function legacyResourceStorageVersion(file) {
+  if ("sourceResourceVersionId" in file || "sourceResourceVersion" in file) {
+    return file.sourceResourceVersionId || file.sourceResourceVersion || "current";
+  }
+  return file.versionId || file.version || "current";
+}
+
+function cachedResourceRequest(file, version = resourceStorageVersion(file)) {
+  return new Request(`/__vidya_setu_offline__/${file.fileId}?version=${encodeURIComponent(version)}`);
+}
+
+function offlineResourceKey(file, version = resourceStorageVersion(file)) {
+  return `${file.fileId}:${version}`;
+}
+
+function openResourceDatabase() {
+  if (!("indexedDB" in window)) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(RESOURCE_DATABASE, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(RESOURCE_STORE)) {
+        request.result.createObjectStore(RESOURCE_STORE, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Offline storage is unavailable."));
+  });
+}
+
+async function saveResourceToIndexedDb(file, blob) {
+  const database = await openResourceDatabase();
+  if (!database) return false;
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(RESOURCE_STORE, "readwrite");
+    transaction.objectStore(RESOURCE_STORE).put({ key: offlineResourceKey(file), blob });
+    transaction.oncomplete = () => {
+      database.close();
+      resolve(true);
+    };
+    transaction.onabort = transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error("Could not save the file offline."));
+    };
+  });
+}
+
+async function getResourceFromIndexedDb(file, version) {
+  const database = await openResourceDatabase();
+  if (!database) return null;
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(RESOURCE_STORE, "readonly");
+    const request = transaction.objectStore(RESOURCE_STORE).get(offlineResourceKey(file, version));
+    request.onsuccess = () => resolve(request.result?.blob || null);
+    request.onerror = () => reject(request.error || new Error("Could not read the offline file."));
+    transaction.oncomplete = () => database.close();
+    transaction.onabort = () => database.close();
+  });
 }
 
 async function cacheResource(file, blob) {
-  if (!("caches" in window)) return false;
-  const cache = await caches.open(RESOURCE_CACHE);
-  await cache.put(cachedResourceRequest(file), new Response(blob, { headers: { "Content-Type": file.mimeType || blob.type || "application/octet-stream" } }));
-  return true;
+  const saved = await Promise.allSettled([
+    (async () => {
+      if (!("caches" in window)) return false;
+      const cache = await caches.open(RESOURCE_CACHE);
+      await cache.put(cachedResourceRequest(file), new Response(blob, { headers: { "Content-Type": file.mimeType || blob.type || "application/octet-stream" } }));
+      return true;
+    })(),
+    saveResourceToIndexedDb(file, blob),
+  ]);
+  return saved.some((result) => result.status === "fulfilled" && result.value);
 }
 
 async function getCachedResourceUrl(file) {
-  if (!("caches" in window)) return "";
-  const cache = await caches.open(RESOURCE_CACHE);
-  const response = await cache.match(cachedResourceRequest(file));
-  if (!response) return "";
-  return URL.createObjectURL(await response.blob());
+  let blob = null;
+  const versions = [...new Set([resourceStorageVersion(file), legacyResourceStorageVersion(file)])];
+  if ("caches" in window) {
+    try {
+      const cache = await caches.open(RESOURCE_CACHE);
+      for (const version of versions) {
+        const response = await cache.match(cachedResourceRequest(file, version));
+        if (response) {
+          blob = await response.blob();
+          break;
+        }
+      }
+    } catch {
+      blob = null;
+    }
+  }
+  if (!blob) {
+    try {
+      for (const version of versions) {
+        blob = await getResourceFromIndexedDb(file, version);
+        if (blob) break;
+      }
+    } catch {
+      blob = null;
+    }
+  }
+  return blob ? URL.createObjectURL(blob) : "";
+}
+
+async function removeOfflineResource(fileId) {
+  const tasks = [];
+  if ("caches" in window) {
+    tasks.push((async () => {
+      const cache = await caches.open(RESOURCE_CACHE);
+      const requests = await cache.keys();
+      const path = `/__vidya_setu_offline__/${fileId}`;
+      await Promise.all(requests
+        .filter((request) => new URL(request.url).pathname === path)
+        .map((request) => cache.delete(request)));
+    })());
+  }
+  tasks.push((async () => {
+    const database = await openResourceDatabase();
+    if (!database) return;
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(RESOURCE_STORE, "readwrite");
+      const store = transaction.objectStore(RESOURCE_STORE);
+      const keys = store.getAllKeys();
+      keys.onsuccess = () => keys.result
+        .filter((key) => String(key).startsWith(`${fileId}:`))
+        .forEach((key) => store.delete(key));
+      keys.onerror = () => reject(keys.error || new Error("Could not remove offline file."));
+      transaction.oncomplete = () => {
+        database.close();
+        resolve();
+      };
+      transaction.onabort = transaction.onerror = () => {
+        database.close();
+        reject(transaction.error || new Error("Could not remove offline file."));
+      };
+    });
+  })());
+  await Promise.allSettled(tasks);
 }
 
 function Icon({ type }) {
@@ -163,7 +292,18 @@ export default function StudentLiveDashboard() {
         setLectures(content.lectures);
         setDoubts(doubtData.doubts);
         setUnreadReplies(doubtData.unreadReplies || 0);
-        setSavedDownloads(downloadData.downloads || []);
+        const assignedFileIds = new Set(content.lectures.flatMap((lecture) => lecture.resources || []).map((file) => file.fileId));
+        setSavedDownloads((current) => {
+          current
+            .filter((download) => !assignedFileIds.has(download.fileId))
+            .forEach((download) => void removeOfflineResource(download.fileId));
+          return downloadData.downloads || [];
+        });
+        setResource((current) => {
+          if (!current || assignedFileIds.has(current.fileId)) return current;
+          if (current.localUrl) URL.revokeObjectURL(current.localUrl);
+          return null;
+        });
         setQuizzes(quizData.quizzes || []);
         setReminderUpdates(updateData?.updates || []);
         setVersionAlerts(
@@ -609,15 +749,16 @@ export default function StudentLiveDashboard() {
     }
   }
   async function openResource(item) {
-    const localUrl = await getCachedResourceUrl(item).catch(() => "");
-    if (!online && !localUrl) return;
-    if (online && item.lectureId)
+    const localUrl = item.localUrl || await getCachedResourceUrl(item).catch(() => "");
+    if (!hasInternetConnection(online) && !localUrl) return false;
+    if (hasInternetConnection(online) && item.lectureId)
       fetch("/api/student/views", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lectureId: item.lectureId }),
       });
     setResource({ ...item, localUrl });
+    return true;
   }
 }
 
@@ -1064,6 +1205,10 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
   const resumable = files.filter((file) => !file.completed);
   const completed = files.filter((file) => file.completed && file.cached);
   async function download(file) {
+    if (!hasInternetConnection(online)) {
+      setStatus("Internet not available. Ask mam.");
+      return;
+    }
     setActiveDownload(file.fileId);
     setStatus(`Downloading ${file.filename}...`);
     const start = 0;
@@ -1120,9 +1265,38 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
       lectureId: file.lecture?._id,
       title: file.title,
       chapter: file.chapter,
-      version: file.lecture?.version,
+      sourceResourceVersionId: file.versionId || null,
+      sourceResourceVersion: file.version || null,
+      versionId: file.versionId || file.lecture?.versionId,
+      version: file.version || file.lecture?.version,
       corrections: file.lecture?.corrections || [],
     };
+    async function watchOffline() {
+      const offlineWindow = resourceItem.kind === "video" ? null : window.open("", "_blank");
+      const localUrl = await getCachedResourceUrl(resourceItem).catch(() => "");
+      if (!localUrl) {
+        offlineWindow?.close();
+        setStatus("This file is not available offline. Connect to the internet and download it again.");
+        return;
+      }
+      if (resourceItem.kind !== "video") {
+        if (offlineWindow) {
+          offlineWindow.opener = null;
+          offlineWindow.location.replace(localUrl);
+        } else {
+          const link = document.createElement("a");
+          link.href = localUrl;
+          link.download = resourceItem.filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        }
+        window.setTimeout(() => URL.revokeObjectURL(localUrl), 60_000);
+        setStatus(`Opening ${resourceItem.filename} from offline storage...`);
+        return;
+      }
+      await openResource({ ...resourceItem, localUrl });
+    }
     return (
       <article className="workspace-card rounded-2xl border border-[#dfe9e1] bg-white p-3 sm:p-4">
         <div className="flex items-start gap-3">
@@ -1174,7 +1348,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 onClick={() =>
-                  complete ? openResource(resourceItem) : download(file)
+                  complete ? watchOffline() : download(file)
                 }
                 disabled={activeDownload === file.fileId}
                 className="rounded-lg bg-[#1675ed] px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
@@ -1775,13 +1949,79 @@ function StudentDoubts({ doubts }) {
   );
 }
 
+function LessonHelper({ resource, online, timestamp, pageNumber, setPageNumber, onAskTeacher }) {
+  const [messages, setMessages] = useState([]);
+  const [question, setQuestion] = useState("");
+  const [status, setStatus] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    const text = question.trim();
+    if (!text || sending) return;
+    if (!hasInternetConnection(online)) {
+      setStatus("Internet not available. Ask mam.");
+      return;
+    }
+    const history = messages.slice(-4);
+    const nextMessages = [...messages, { role: "student", text }];
+    setMessages(nextMessages);
+    setQuestion("");
+    setStatus("");
+    setSending(true);
+    try {
+      const response = await fetch("/api/student/lesson-helper", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lectureId: resource.lectureId,
+          resourceKind: resource.kind,
+          timestampSeconds: timestamp,
+          pageNumber,
+          question: text,
+          history,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Lesson helper is unavailable.");
+      setMessages((current) => [...current, { role: "assistant", text: data.answer, fallback: data.fallback }]);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Lesson helper is unavailable.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <section className="mt-4 rounded-xl border border-[#bcd8ff] bg-[#f5f9ff] p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-bold text-[#155db2]">Ask AI</p>
+          <p className="mt-1 text-xs leading-5 text-[#52708f]">Answers stay limited to {resource.subject || resource.chapter || "this lesson"}. If it is unsure, it will ask you to send mam a doubt.</p>
+        </div>
+        <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-[#1675ed]">Topic only</span>
+      </div>
+      <p className="mt-3 text-xs text-[#52708f]">{resource.kind === "video" ? `Using timestamp: ${formatTime(timestamp)}` : "Add the PPT/PDF page for a more specific answer."}</p>
+      {resource.kind !== "video" && <input type="number" min="1" value={pageNumber} onChange={(event) => setPageNumber(event.target.value)} placeholder="Current page number (optional)" className="mt-2 w-full rounded-lg border border-[#c9ddf1] bg-white px-3 py-2 text-sm" />}
+      {messages.length > 0 && <div className="mt-4 max-h-64 space-y-3 overflow-y-auto pr-1">{messages.map((message, index) => <div key={`${message.role}-${index}`} className={`rounded-lg p-3 text-sm leading-6 ${message.role === "student" ? "ml-8 bg-white text-[#284b69]" : message.fallback ? "mr-4 bg-[#fff6df] text-[#775d22]" : "mr-4 bg-[#e4f1ff] text-[#173b5c]"}`}><strong className="block text-[10px] uppercase tracking-[0.14em]">{message.role === "student" ? "You" : message.fallback ? "Ask mam" : "Lesson helper"}</strong><span className="mt-1 block">{message.text}</span>{message.fallback && <button type="button" onClick={onAskTeacher} className="mt-2 text-xs font-bold text-[#1d5148]">Send this doubt to mam →</button>}</div>)}</div>}
+      <form onSubmit={submit} className="mt-4">
+        <textarea required maxLength="1200" value={question} onChange={(event) => setQuestion(event.target.value)} rows="3" placeholder={`Ask about ${resource.title || "this lesson"}...`} className="w-full resize-none rounded-lg border border-[#c9ddf1] bg-white px-3 py-2 text-sm" />
+        <div className="mt-3 flex flex-wrap items-center gap-3"><button type="submit" disabled={sending} className="rounded-lg bg-[#1675ed] px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50">{sending ? "Thinking..." : "Ask AI"}</button><button type="button" onClick={onAskTeacher} className="text-xs font-bold text-[#1d5148]">Ask mam instead</button></div>
+      </form>
+      {status && <p className="mt-3 text-xs font-semibold text-[#a14d2a]">{status}</p>}
+    </section>
+  );
+}
+
 function OfflineResourceModal({ resource, online, studentId, onClose, onSent }) {
   const videoRef = useRef(null);
   const [showAsk, setShowAsk] = useState(false);
+  const [showHelper, setShowHelper] = useState(false);
   const [timestamp, setTimestamp] = useState(0);
   const [pageNumber, setPageNumber] = useState("");
   const [question, setQuestion] = useState("");
   const [message, setMessage] = useState("");
+  const [aiMessage, setAiMessage] = useState("");
   const url = resource.localUrl || (resource.fileId ? `/api/teacher/files/${resource.fileId}` : "");
   function queueDoubt(payload) {
     if (!studentId) return false;
@@ -1869,12 +2109,23 @@ function OfflineResourceModal({ resource, online, studentId, onClose, onSent }) 
             Open {resource.filename}
           </a>
         )}
-        <button
-          onClick={() => setShowAsk((current) => !current)}
-          className="mt-5 rounded-xl border border-[#dfe9e1] px-4 py-3 text-sm font-bold text-[#1d5148]"
-        >
-          {showAsk ? "Hide ask a doubt" : "Ask a doubt"}
-        </button>
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button onClick={() => {
+            if (!showHelper && !hasInternetConnection(online)) {
+              setAiMessage("Internet not available. Ask mam instead.");
+              return;
+            }
+            setAiMessage("");
+            setShowHelper((current) => !current);
+          }} className="rounded-xl bg-[#1675ed] px-4 py-3 text-sm font-bold text-white">
+            {showHelper ? "Hide Ask AI" : "Ask AI"}
+          </button>
+          <button onClick={() => setShowAsk((current) => !current)} className="rounded-xl border border-[#dfe9e1] px-4 py-3 text-sm font-bold text-[#1d5148]">
+            {showAsk ? "Hide ask a doubt" : "Ask mam a doubt"}
+          </button>
+        </div>
+        {aiMessage && <p role="alert" className="mt-3 rounded-lg bg-[#fff0f0] px-3 py-2 text-xs font-semibold text-[#c43838]">{aiMessage}</p>}
+        {showHelper && <LessonHelper resource={resource} online={online} timestamp={timestamp} pageNumber={pageNumber} setPageNumber={setPageNumber} onAskTeacher={() => setShowAsk(true)} />}
         {showAsk && (
           <form
             onSubmit={submit}

@@ -25,6 +25,8 @@ Set `.env.local` for local MongoDB:
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DB=vidya_setu
 SESSION_SECRET=replace-with-a-private-random-string-of-at-least-32-characters
+OPENAI_API_KEY=your-server-only-openai-api-key
+OPENAI_MODEL=gpt-6-luna
 ```
 
 Start MongoDB. On Windows, when installed as a service, use an elevated PowerShell:
@@ -60,7 +62,11 @@ Students `102` to `110` also use password `student123`.
 
 Replace `MONGODB_URI` in `.env.local` with the hosted connection string, then restart the app. Allow the application IP address in your database provider.
 
-For deployment, set all three variables in the hosting dashboard. Do not run the demo seed command against a real school database, and replace all demo accounts before sharing the app publicly.
+For deployment, set the required variables in the hosting dashboard. Do not run the demo seed command against a real school database, and replace all demo accounts before sharing the app publicly.
+
+## Lesson helper AI (optional)
+
+Add `OPENAI_API_KEY` and restart the app to enable **Ask lesson helper** while a student is watching a resource. The key stays on the server. The helper only receives the assigned lesson title, topic, version, teacher description, and current timestamp/page; if it cannot answer confidently, it asks the student to send a doubt to the teacher.
 
 ## Verify
 

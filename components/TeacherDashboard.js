@@ -244,6 +244,27 @@ export default function TeacherDashboard() {
     notify("Lecture and files saved to MongoDB");
   }
 
+  async function handleDeleteLecture(lecture) {
+    if (!window.confirm(`Delete “${lecture.title}”? This will remove it for all assigned students too.`)) return;
+    let response;
+    let result;
+    try {
+      response = await fetch(`/api/teacher/lectures/${lecture._id}`, { method: "DELETE" });
+      result = await response.json();
+    } catch {
+      notify("Lecture could not be deleted. Check your internet connection.");
+      return;
+    }
+    if (!response.ok) {
+      notify(result.error || "Lecture could not be deleted.");
+      return;
+    }
+    setLectures((current) => current.filter((item) => item._id !== lecture._id));
+    setResourceLecture((current) => current?._id === lecture._id ? null : current);
+    setVersionLecture((current) => current?._id === lecture._id ? null : current);
+    notify("Lecture removed for you and assigned students.");
+  }
+
   function openCreateLecture() {
     setActiveNav("create");
     setShowCreate(true);
@@ -368,6 +389,7 @@ export default function TeacherDashboard() {
               onCreateLecture={openCreateLecture}
               stats={stats}
               onOpenResource={setResourceLecture}
+              onDeleteLecture={handleDeleteLecture}
               students={students}
               doubts={doubts}
               notify={notify}
@@ -379,6 +401,7 @@ export default function TeacherDashboard() {
               notify={notify}
               onOpenResource={setResourceLecture}
               onNewVersion={setVersionLecture}
+              onDeleteLecture={handleDeleteLecture}
             />
           )}
           {activeNav === "students" && <StudentsView students={students} />}
@@ -415,6 +438,7 @@ export default function TeacherDashboard() {
             setResourceLecture(null);
             setVersionLecture(lecture);
           }}
+          onDelete={handleDeleteLecture}
         />
       )}
       {versionLecture && (
@@ -468,7 +492,7 @@ function TeacherNotifications({ notifications, onOpenDoubts, onOpenQuizzes }) {
   );
 }
 
-function DashboardView({ lectures, setActiveNav, onCreateLecture, stats, onOpenResource, students, doubts, notify }) {
+function DashboardView({ lectures, setActiveNav, onCreateLecture, stats, onOpenResource, onDeleteLecture, students, doubts, notify }) {
   const [selectedDetail, setSelectedDetail] = useState("");
   return (
     <div className="mt-6">
@@ -514,6 +538,7 @@ function DashboardView({ lectures, setActiveNav, onCreateLecture, stats, onOpenR
           lectures={lectures}
           onManage={() => setActiveNav("courses")}
           onOpenResource={onOpenResource}
+          onDelete={onDeleteLecture}
         />
       </div>
     </div>
@@ -561,7 +586,7 @@ function Kpi({ title, value, detail, tone, onClick }) {
   );
 }
 
-function LectureTable({ lectures, onManage, onOpenResource }) {
+function LectureTable({ lectures, onManage, onOpenResource, onDelete }) {
   return (
     <section className="rounded-xl border border-[#dce8f7] bg-white p-4">
       <div className="flex items-center justify-between">
@@ -593,6 +618,13 @@ function LectureTable({ lectures, onManage, onOpenResource }) {
                 >
                   View
                 </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(lecture)}
+                  className="rounded-lg bg-[#fff0f0] px-3 py-2 text-xs font-bold text-[#c43838]"
+                >
+                  Delete
+                </button>
               </div>
             ))}
       </div>
@@ -600,7 +632,7 @@ function LectureTable({ lectures, onManage, onOpenResource }) {
   );
 }
 
-function CoursesView({ lectures, notify, onOpenResource, onNewVersion }) {
+function CoursesView({ lectures, notify, onOpenResource, onNewVersion, onDeleteLecture }) {
   const chapters = lectures.reduce((groups, lecture) => {
     const key = lecture.chapter?.trim() || "Unassigned chapter";
     if (!groups[key]) groups[key] = [];
@@ -626,6 +658,7 @@ function CoursesView({ lectures, notify, onOpenResource, onNewVersion }) {
             teacher={`${chapterLectures.length} resource${chapterLectures.length === 1 ? "" : "s"}`}
             lectures={chapterLectures}
             onOpenResource={onOpenResource}
+            onDelete={onDeleteLecture}
           />
         ))}
       </div>
@@ -637,6 +670,7 @@ function CourseSection({
   teacher,
   lectures,
   onOpenResource,
+  onDelete,
 }) {
   return (
     <section className="workspace-card overflow-hidden rounded-2xl border border-[#dce8f7] bg-white">
@@ -688,6 +722,13 @@ function CourseSection({
                   className="rounded-lg bg-[#1675ed] px-3 py-2 text-xs font-bold text-white"
                 >
                   Open resource
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(lecture)}
+                  className="rounded-lg bg-[#fff0f0] px-3 py-2 text-xs font-bold text-[#c43838]"
+                >
+                  Delete
                 </button>
               </div>
             </div>
@@ -1232,7 +1273,7 @@ function versionLabel(version) {
   return String(version).startsWith("V") ? String(version) : `V${version}`;
 }
 
-function ResourceModal({ lecture, onClose, onNewVersion }) {
+function ResourceModal({ lecture, onClose, onNewVersion, onDelete }) {
   const resources = lecture.resources || [];
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -1362,12 +1403,21 @@ function ResourceModal({ lecture, onClose, onNewVersion }) {
             <p className="text-sm text-[#6680a7]">No file selected.</p>
           )}
         </div>
-        <button
-          onClick={onClose}
-          className="mt-5 rounded-lg border border-[#dce8f7] px-4 py-3 text-sm font-bold text-[#587092]"
-        >
-          Close
-        </button>
+        <div className="mt-5 flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => onDelete(lecture)}
+            className="rounded-lg bg-[#fff0f0] px-4 py-3 text-sm font-bold text-[#c43838]"
+          >
+            Delete lecture
+          </button>
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-[#dce8f7] px-4 py-3 text-sm font-bold text-[#587092]"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
