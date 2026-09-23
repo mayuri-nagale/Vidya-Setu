@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../lib/auth";
+import { getAssignedStudentIds, upsertNotifications } from "../../../../lib/notifications";
 
 export async function GET() {
   const teacherId = await getCurrentTeacherId();
@@ -69,5 +70,24 @@ export async function POST(request) {
     updatedAt: new Date(),
   };
   const result = await db.collection("lectures").insertOne(lecture);
+  const lectureId = result.insertedId.toString();
+  const studentIds = await getAssignedStudentIds(
+    db,
+    lecture.assignedStandards,
+    lecture.assignedDivisions,
+  );
+  await upsertNotifications(
+    db,
+    studentIds.map((studentId) => ({
+      eventKey: `lecture:${lectureId}:published:${studentId}`,
+      recipientRole: "student",
+      recipientId: studentId,
+      type: "new_content",
+      title: `New lesson: ${lecture.title}`,
+      detail: `${lecture.subject} · ${lecture.chapter} · ${resources.length} resource${resources.length === 1 ? "" : "s"} added`,
+      lectureId,
+      version: lecture.version,
+    })),
+  );
   return NextResponse.json({ lecture: { ...lecture, _id: result.insertedId } }, { status: 201 });
 }

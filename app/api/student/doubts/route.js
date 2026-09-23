@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentStudentId } from "../../../../lib/auth";
+import { upsertNotifications } from "../../../../lib/notifications";
 
 export async function GET() {
   const studentId = await getCurrentStudentId();
@@ -32,5 +33,16 @@ export async function POST(request) {
   if (!lecture) return NextResponse.json({ error: "Lecture is not assigned to this student." }, { status: 403 });
   const doubt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], createdAt: new Date() };
   const result = await db.collection("doubts").insertOne(doubt);
+  await upsertNotifications(db, [{
+    eventKey: `doubt:${result.insertedId}:teacher`,
+    recipientRole: "teacher",
+    recipientId: lecture.teacherId,
+    type: "doubt",
+    title: `${student.name} asked a doubt`,
+    detail: `${lecture.title}: ${doubt.question}`,
+    lectureId: lecture._id.toString(),
+    doubtId: result.insertedId.toString(),
+    createdAt: doubt.createdAt,
+  }]);
   return NextResponse.json({ doubt: { ...doubt, _id: result.insertedId.toString(), lectureId: lecture._id.toString() } }, { status: 201 });
 }

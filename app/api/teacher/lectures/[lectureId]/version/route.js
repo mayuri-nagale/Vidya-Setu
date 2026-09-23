@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../../../lib/auth";
+import { getAssignedStudentIds, upsertNotifications } from "../../../../../../lib/notifications";
 
 export async function POST(request, { params }) {
   const teacherId = await getCurrentTeacherId();
@@ -50,5 +51,23 @@ export async function POST(request, { params }) {
   }
 
   await db.collection("lectures").updateOne({ _id: existing._id }, { $set: update });
+  const studentIds = await getAssignedStudentIds(
+    db,
+    existing.assignedStandards,
+    existing.assignedDivisions,
+  );
+  await upsertNotifications(
+    db,
+    studentIds.map((studentId) => ({
+      eventKey: `lecture:${existing._id}:version:${nextVersion}:${studentId}`,
+      recipientRole: "student",
+      recipientId: studentId,
+      type: "content_updated",
+      title: `${existing.title} was updated`,
+      detail: summaryNote || changes,
+      lectureId: existing._id.toString(),
+      version: nextVersion,
+    })),
+  );
   return NextResponse.json({ lecture: { ...existing, ...update, _id: existing._id.toString() } });
 }

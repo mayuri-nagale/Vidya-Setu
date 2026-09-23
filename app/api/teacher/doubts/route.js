@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../lib/auth";
+import { upsertNotifications } from "../../../../lib/notifications";
 
 export async function GET() {
   const teacherId = await getCurrentTeacherId();
@@ -23,5 +24,16 @@ export async function POST(request) {
     { returnDocument: "after" },
   );
   if (!result) return NextResponse.json({ error: "Doubt not found." }, { status: 404 });
+  await upsertNotifications(db, [{
+    eventKey: `doubt:${result._id}:reply:${result.replies.at(-1).createdAt.getTime()}`,
+    recipientRole: "student",
+    recipientId: result.studentId,
+    type: "doubt_reply",
+    title: `Mam replied to your doubt in ${result.title}`,
+    detail: String(reply).trim(),
+    lectureId: result.lectureId.toString(),
+    doubtId: result._id.toString(),
+    createdAt: result.replies.at(-1).createdAt,
+  }]);
   return NextResponse.json({ doubt: { ...result, _id: result._id.toString(), lectureId: result.lectureId.toString() } });
 }

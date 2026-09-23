@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
+import NearbyShareLauncher from "./NearbyShareLauncher";
 
 function Icon({ type }) {
   const icons = {
@@ -458,6 +459,7 @@ export default function StudentLiveDashboard() {
           onClose={() => setActiveQuiz(null)}
         />
       )}
+      <NearbyShareLauncher />
     </main>
   );
 
@@ -1208,6 +1210,7 @@ function UpdatesView({ versionAlerts, reminderUpdates, doubts, savedDownloads })
     content_updated: { label: "Updated", dot: "bg-[#8655d7]", panel: "bg-[#faf8ff]", icon: "↻" },
     download_complete: { label: "Downloaded", dot: "bg-[#149463]", panel: "bg-[#edfff6]", icon: "↓" },
     doubt_reply: { label: "Doubt reply", dot: "bg-[#d56c14]", panel: "bg-[#fff7ed]", icon: "✉" },
+    quiz_submitted: { label: "Quiz submitted", dot: "bg-[#1675ed]", panel: "bg-[#f2f8ff]", icon: "✓" },
   };
   return (
     <div className="mt-7">

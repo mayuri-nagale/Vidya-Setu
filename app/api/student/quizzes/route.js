@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentStudentId } from "../../../../lib/auth";
+import { upsertNotifications } from "../../../../lib/notifications";
 
 export async function GET() {
   const studentId = await getCurrentStudentId();
@@ -29,5 +30,27 @@ export async function POST(request) {
   const totalPoints = results.reduce((sum, result) => sum + result.points, 0);
   const attempt = { studentId, studentName: student.name, lectureId: lecture._id, teacherId: lecture.teacherId, score, totalPoints, percentage: totalPoints ? Math.round((score / totalPoints) * 100) : 0, results, submittedAt: new Date() };
   await db.collection("quizAttempts").updateOne({ studentId, lectureId: lecture._id }, { $set: attempt }, { upsert: true });
+  await upsertNotifications(db, [
+    {
+      eventKey: `quiz:${lecture._id}:attempt:${studentId}:teacher`,
+      recipientRole: "teacher",
+      recipientId: lecture.teacherId,
+      type: "quiz_attempt",
+      title: `${student.name} attempted ${lecture.title}`,
+      detail: `Score: ${score}/${totalPoints} (${attempt.percentage}%)`,
+      lectureId: lecture._id.toString(),
+      createdAt: attempt.submittedAt,
+    },
+    {
+      eventKey: `quiz:${lecture._id}:attempt:${studentId}:student`,
+      recipientRole: "student",
+      recipientId: studentId,
+      type: "quiz_submitted",
+      title: `Quiz submitted: ${lecture.title}`,
+      detail: `Your score is ${score}/${totalPoints} (${attempt.percentage}%).`,
+      lectureId: lecture._id.toString(),
+      createdAt: attempt.submittedAt,
+    },
+  ]);
   return NextResponse.json({ attempt: { ...attempt, lectureId: lecture._id.toString() } });
 }

@@ -13,6 +13,25 @@ export async function GET() {
   const student = await db.collection("students").findOne({ studentId });
   if (!student) return NextResponse.json({ error: "Student not found" }, { status: 404 });
 
+  const savedUpdates = await db.collection("notifications")
+    .find({ recipientRole: "student", recipientId: studentId })
+    .sort({ createdAt: -1 })
+    .limit(30)
+    .toArray();
+  if (savedUpdates.length) {
+    return NextResponse.json({
+      updates: savedUpdates.map((update) => ({
+        id: update.eventKey,
+        type: update.type,
+        title: update.title,
+        detail: update.detail,
+        createdAt: update.createdAt,
+        lectureId: update.lectureId,
+        version: update.version,
+      })),
+    });
+  }
+
   const [lectures, reminders, downloads, doubts] = await Promise.all([
     db.collection("lectures").find({ assignedStandards: student.standard, assignedDivisions: student.division }).sort({ updatedAt: -1 }).toArray(),
     db.collection("lectureReminders").find({ studentIds: studentId }).sort({ sentAt: -1 }).toArray(),

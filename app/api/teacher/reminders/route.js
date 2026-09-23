@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../lib/auth";
+import { upsertNotifications } from "../../../../lib/notifications";
 
 export async function POST(request) {
   const teacherId = await getCurrentTeacherId();
@@ -18,6 +19,20 @@ export async function POST(request) {
     { teacherId, lectureId: lectureObjectId, version: lecture.version },
     { $set: { teacherId, lectureId: lectureObjectId, version: lecture.version, studentIds, message: String(message || `Please complete ${lecture.title} and review the latest resources.`).trim(), sentAt: now, updatedAt: now } },
     { upsert: true },
+  );
+  await upsertNotifications(
+    db,
+    studentIds.map((studentId) => ({
+      eventKey: `reminder:${lectureId}:${lecture.version}:${now.getTime()}:${studentId}`,
+      recipientRole: "student",
+      recipientId: studentId,
+      type: "reminder",
+      title: `Reminder from mam: ${lecture.title}`,
+      detail: String(message || `Please complete ${lecture.title} and review the latest resources.`).trim(),
+      lectureId,
+      version: lecture.version,
+      createdAt: now,
+    })),
   );
   return NextResponse.json({ ok: true, sent: studentIds.length, version: lecture.version });
 }

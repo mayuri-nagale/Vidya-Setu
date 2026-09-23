@@ -50,8 +50,9 @@ export default function TeacherDashboard() {
   const [quizResults, setQuizResults] = useState([]);
   const [liveVersion, setLiveVersion] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [savedNotifications, setSavedNotifications] = useState([]);
 
-  const teacherNotifications = [
+  const derivedTeacherNotifications = [
     ...doubts.filter((doubt) => doubt.status === "open").map((doubt) => ({
       id: `doubt-${doubt._id}`,
       type: "doubt",
@@ -67,6 +68,15 @@ export default function TeacherDashboard() {
       createdAt: quiz.attempts?.at(-1)?.submittedAt,
     })),
   ].sort((first, second) => new Date(second.createdAt || 0) - new Date(first.createdAt || 0));
+  const teacherNotifications = savedNotifications.length
+    ? savedNotifications.map((notification) => ({
+        id: notification._id,
+        type: notification.type === "doubt" ? "doubt" : "quiz",
+        title: notification.title,
+        detail: notification.detail,
+        createdAt: notification.createdAt,
+      }))
+    : derivedTeacherNotifications;
 
   useEffect(() => {
     const getLive = (url) => fetch(url, { cache: "no-store" });
@@ -77,6 +87,7 @@ export default function TeacherDashboard() {
       getLive("/api/teacher/doubts"),
       getLive("/api/teacher/stats"),
       getLive("/api/teacher/quizzes"),
+      getLive("/api/teacher/notifications"),
     ])
       .then(
         async ([
@@ -86,6 +97,7 @@ export default function TeacherDashboard() {
           doubtsResponse,
           statsResponse,
           quizResponse,
+          notificationResponse,
         ]) => {
           if (!profileResponse.ok || !lecturesResponse.ok)
             throw new Error("Session expired");
@@ -113,6 +125,8 @@ export default function TeacherDashboard() {
           setStats(await statsResponse.json());
           if (quizResponse.ok)
             setQuizResults((await quizResponse.json()).quizzes);
+          if (notificationResponse.ok)
+            setSavedNotifications((await notificationResponse.json()).notifications);
         },
       )
       .catch(() =>
@@ -146,12 +160,14 @@ export default function TeacherDashboard() {
         doubtsResponse,
         statsResponse,
         quizResponse,
+        notificationResponse,
       ] = await Promise.all([
         fetch("/api/teacher/lectures", { cache: "no-store" }),
         fetch("/api/teacher/students", { cache: "no-store" }),
         fetch("/api/teacher/doubts", { cache: "no-store" }),
         fetch("/api/teacher/stats", { cache: "no-store" }),
         fetch("/api/teacher/quizzes", { cache: "no-store" }),
+        fetch("/api/teacher/notifications", { cache: "no-store" }),
       ]);
       if (lecturesResponse.ok) {
         const saved = await lecturesResponse.json();
@@ -174,6 +190,8 @@ export default function TeacherDashboard() {
       if (doubtsResponse.ok) setDoubts((await doubtsResponse.json()).doubts);
       if (statsResponse.ok) setStats(await statsResponse.json());
       if (quizResponse.ok) setQuizResults((await quizResponse.json()).quizzes);
+      if (notificationResponse.ok)
+        setSavedNotifications((await notificationResponse.json()).notifications);
     }
     refreshDashboard().catch(() => {});
     const timer = window.setInterval(
