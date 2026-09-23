@@ -24,7 +24,7 @@ Set `.env.local` for local MongoDB:
 ```env
 MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DB=vidya_setu
-SESSION_SECRET=any-long-private-random-string
+SESSION_SECRET=replace-with-a-private-random-string-of-at-least-32-characters
 ```
 
 Start MongoDB. On Windows, when installed as a service, use an elevated PowerShell:
@@ -59,6 +59,8 @@ Students `102` to `110` also use password `student123`.
 ## Cloud DB (optional)
 
 Replace `MONGODB_URI` in `.env.local` with the hosted connection string, then restart the app. Allow the application IP address in your database provider.
+
+For deployment, set all three variables in the hosting dashboard. Do not run the demo seed command against a real school database, and replace all demo accounts before sharing the app publicly.
 
 ## Verify
 

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentTeacherId } from "../../../../lib/auth";
 import { getAssignedStudentIds, upsertNotifications } from "../../../../lib/notifications";
+import { readLectureFields, validateQuiz, validateUpload } from "../../../../lib/validation";
 
 export async function GET() {
   const teacherId = await getCurrentTeacherId();
@@ -19,35 +20,40 @@ export async function POST(request) {
   if (!teacherId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const form = await request.formData();
-  const title = String(form.get("title") || "").trim();
-  const subject = String(form.get("subject") || "").trim();
-  const chapter = String(form.get("chapter") || "").trim();
-  const assignedStandard = String(form.get("assignedStandard") || "").trim();
-  const assignedDivision = String(form.get("assignedDivision") || "").trim();
-  if (!title || !subject || !chapter || !assignedStandard || !assignedDivision) {
-    return NextResponse.json({ error: "Title, subject, chapter, standard and division are required." }, { status: 400 });
+  let fields;
+  let quiz;
+  try {
+    fields = readLectureFields(form);
+    quiz = validateQuiz(JSON.parse(String(form.get("quiz") || "[]")));
+  } catch (error) {
+    return NextResponse.json({ error: error.message || "Invalid lecture data." }, { status: 400 });
   }
+  const { title, subject, chapter, assignedStandard, assignedDivision, description } = fields;
 
   const db = await getDb();
   const bucket = new GridFSBucket(db, { bucketName: "lectureFiles" });
   const resources = [];
+  const uploadedIds = [];
+  try {
   for (const field of ["video", "ppt", "pdf"]) {
     const file = form.get(field);
-    if (!file || typeof file.arrayBuffer !== "function" || file.size === 0) continue;
+    const validFile = validateUpload(file, field);
+    if (!validFile) continue;
     const bytes = Buffer.from(await file.arrayBuffer());
     const checksum = createHash("sha256").update(bytes).digest("hex");
     const fileId = await new Promise((resolve, reject) => {
-      const upload = bucket.openUploadStream(file.name, { metadata: { teacherId, subject, chapter, kind: field } });
+      const upload = bucket.openUploadStream(validFile.name, { metadata: { teacherId, subject, chapter, kind: field } });
       upload.on("error", reject);
       upload.on("finish", () => resolve(upload.id));
       upload.end(bytes);
     });
-    resources.push({ kind: field, filename: file.name, mimeType: file.type, size: file.size, checksum, fileId });
+    uploadedIds.push(fileId);
+    resources.push({ kind: field, filename: validFile.name, mimeType: validFile.type, size: validFile.size, checksum, fileId });
   }
-
-  let quiz = [];
-  try { quiz = JSON.parse(String(form.get("quiz") || "[]")); } catch { return NextResponse.json({ error: "Quiz data is invalid." }, { status: 400 }); }
-  if (!Array.isArray(quiz)) return NextResponse.json({ error: "Quiz data is invalid." }, { status: 400 });
+  } catch (error) {
+    await Promise.allSettled(uploadedIds.map((fileId) => bucket.delete(fileId)));
+    return NextResponse.json({ error: error.message || "File upload failed." }, { status: 400 });
+  }
   const lecture = {
     lectureId: `lec_${randomUUID().replaceAll("-", "").slice(0, 8)}`,
     teacherId,
@@ -56,7 +62,7 @@ export async function POST(request) {
     subject,
     chapter,
     title,
-    description: String(form.get("description") || "").trim(),
+    description,
     quiz,
     resources,
     version: 1,
@@ -69,14 +75,20 @@ export async function POST(request) {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  const result = await db.collection("lectures").insertOne(lecture);
+  let result;
+  try {
+    result = await db.collection("lectures").insertOne(lecture);
+  } catch (error) {
+    await Promise.allSettled(uploadedIds.map((fileId) => bucket.delete(fileId)));
+    throw error;
+  }
   const lectureId = result.insertedId.toString();
   const studentIds = await getAssignedStudentIds(
     db,
     lecture.assignedStandards,
     lecture.assignedDivisions,
   );
-  await upsertNotifications(
+  try { await upsertNotifications(
     db,
     studentIds.map((studentId) => ({
       eventKey: `lecture:${lectureId}:published:${studentId}`,
@@ -88,6 +100,6 @@ export async function POST(request) {
       lectureId,
       version: lecture.version,
     })),
-  );
+  ); } catch (error) { console.error("Lecture notification creation failed", error); }
   return NextResponse.json({ lecture: { ...lecture, _id: result.insertedId } }, { status: 201 });
 }

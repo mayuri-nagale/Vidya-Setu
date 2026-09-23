@@ -13,7 +13,7 @@ export async function POST(request) {
   if (!student) return NextResponse.json({ error: "Student not found." }, { status: 404 });
   const result = await db.collection("lectures").updateOne(
     { _id: new ObjectId(lectureId), assignedStandards: student.standard, assignedDivisions: student.division },
-    { $addToSet: { viewedBy: studentId }, $set: { updatedAt: new Date() } },
+    { $addToSet: { viewedBy: studentId } },
   );
   if (!result.matchedCount) return NextResponse.json({ error: "Lecture is not assigned to this student." }, { status: 403 });
   return NextResponse.json({ ok: true });

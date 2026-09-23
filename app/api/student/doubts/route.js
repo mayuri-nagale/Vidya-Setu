@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentStudentId } from "../../../../lib/auth";
 import { upsertNotifications } from "../../../../lib/notifications";
+import { boundedText } from "../../../../lib/security";
 
 export async function GET() {
   const studentId = await getCurrentStudentId();
@@ -25,7 +26,9 @@ export async function POST(request) {
   const studentId = await getCurrentStudentId();
   if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const body = await request.json();
-  if (!body.lectureId || !String(body.question || "").trim()) return NextResponse.json({ error: "Lecture and doubt are required." }, { status: 400 });
+  if (!body.lectureId) return NextResponse.json({ error: "Lecture and doubt are required." }, { status: 400 });
+  let question;
+  try { question = boundedText(body.question, { field: "Doubt", min: 1, max: 2000 }); } catch (error) { return NextResponse.json({ error: error.message }, { status: 400 }); }
   const db = await getDb();
   const student = await db.collection("students").findOne({ studentId });
   if (!ObjectId.isValid(body.lectureId)) return NextResponse.json({ error: "Invalid lecture." }, { status: 400 });
@@ -36,7 +39,9 @@ export async function POST(request) {
     const existing = await db.collection("doubts").findOne({ studentId, clientSyncId });
     if (existing) return NextResponse.json({ doubt: { ...existing, _id: existing._id.toString(), lectureId: existing.lectureId.toString() } });
   }
-  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, lectureVersion: Number(lecture.version || 1), lectureVersionId: lecture.versionId || null, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question: String(body.question).trim(), timestampSeconds: Number(body.timestampSeconds || 0), pageNumber: body.pageNumber ? Number(body.pageNumber) : null, status: "open", replies: [], ...(clientSyncId ? { clientSyncId } : {}), createdAt: new Date() };
+  const timestampSeconds = Math.max(0, Math.min(24 * 60 * 60, Number(body.timestampSeconds) || 0));
+  const pageNumber = body.pageNumber ? Math.max(1, Math.min(10000, Number(body.pageNumber) || 1)) : null;
+  const doubt = { studentId, studentName: student.name, lectureId: lecture._id, lectureVersion: Number(lecture.version || 1), lectureVersionId: lecture.versionId || null, teacherId: lecture.teacherId, title: lecture.title, chapter: lecture.chapter, question, timestampSeconds, pageNumber, status: "open", replies: [], ...(clientSyncId ? { clientSyncId } : {}), createdAt: new Date() };
   let result;
   try {
     result = await db.collection("doubts").insertOne(doubt);

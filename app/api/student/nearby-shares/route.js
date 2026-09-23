@@ -3,8 +3,11 @@ import { GridFSBucket, ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentStudentId } from "../../../../lib/auth";
+import { allowRateLimit, clientKey } from "../../../../lib/security";
 
 const SHARE_LIFETIME_MS = 10 * 60 * 1000;
+const MAX_SIGNAL_BYTES = 32 * 1024;
+const MAX_CANDIDATES_PER_SIDE = 64;
 
 function normalizeCode(value) {
   return String(value || "").replace(/\D/g, "").slice(0, 6);
@@ -51,7 +54,7 @@ async function getAssignedResource(db, student, lectureId, fileId) {
   const checksum = hash.digest("hex");
   await db.collection("lectures").updateOne(
     { _id: lecture._id, "resources.fileId": resource.fileId },
-    { $set: { "resources.$.checksum": checksum, updatedAt: new Date() } },
+    { $set: { "resources.$.checksum": checksum } },
   );
   return { lecture, resource: { ...resource, checksum } };
 }
@@ -80,6 +83,8 @@ export async function POST(request) {
 
   let body;
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid request body." }, { status: 400 }); }
+  const rate = allowRateLimit(clientKey(request, `nearby:${studentId}`), { limit: body.action === "signal" ? 180 : 30, windowMs: 60 * 1000 });
+  if (!rate.allowed) return NextResponse.json({ error: "Too many nearby-share requests. Please wait a moment." }, { status: 429, headers: { "Retry-After": String(rate.retryAfter) } });
   const db = await getDb();
   const action = body.action;
 
@@ -89,7 +94,7 @@ export async function POST(request) {
     if (!assigned) return NextResponse.json({ error: "You can only share a resource assigned to your class." }, { status: 403 });
 
     let shareCode;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
       shareCode = crypto.randomInt(100000, 1000000).toString();
       if (!(await db.collection("nearbyShares").findOne({ shareCode }))) break;
     }
@@ -118,7 +123,12 @@ export async function POST(request) {
       updatedAt: now,
       expiresAt: new Date(now.getTime() + SHARE_LIFETIME_MS),
     };
-    await db.collection("nearbyShares").insertOne(share);
+    try {
+      await db.collection("nearbyShares").insertOne(share);
+    } catch (error) {
+      if (error?.code === 11000) return NextResponse.json({ error: "Could not create a pairing code. Please try again." }, { status: 409 });
+      throw error;
+    }
     return NextResponse.json({ share: publicShare(share) }, { status: 201 });
   }
 
@@ -151,12 +161,15 @@ export async function POST(request) {
     const signalType = body.signalType;
     if ((signalType === "offer" && !isSender) || (signalType === "answer" && isSender)) return NextResponse.json({ error: "Invalid transfer signal." }, { status: 403 });
     if (!["offer", "answer", "candidate"].includes(signalType)) return NextResponse.json({ error: "Invalid transfer signal." }, { status: 400 });
+    if (JSON.stringify(body.signal || "").length > MAX_SIGNAL_BYTES) return NextResponse.json({ error: "Transfer signal is too large." }, { status: 413 });
     const update = { updatedAt: new Date(), state: "connecting" };
     if (signalType === "offer") update.offer = body.signal;
     if (signalType === "answer") update.answer = body.signal;
     if (signalType === "candidate") {
       if (!body.signal?.candidate) return NextResponse.json({ error: "Invalid ICE candidate." }, { status: 400 });
-      await db.collection("nearbyShares").updateOne({ _id: access.share._id }, { $push: { [isSender ? "senderCandidates" : "receiverCandidates"]: body.signal }, $set: update });
+      const field = isSender ? "senderCandidates" : "receiverCandidates";
+      if ((access.share[field] || []).length >= MAX_CANDIDATES_PER_SIDE) return NextResponse.json({ error: "Too many transfer signals. Pair again." }, { status: 429 });
+      await db.collection("nearbyShares").updateOne({ _id: access.share._id }, { $push: { [field]: { $each: [body.signal], $slice: -MAX_CANDIDATES_PER_SIDE } }, $set: update });
       return NextResponse.json({ ok: true });
     }
     await db.collection("nearbyShares").updateOne({ _id: access.share._id }, { $set: update });

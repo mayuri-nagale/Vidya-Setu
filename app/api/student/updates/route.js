@@ -6,36 +6,26 @@ function updateTime(value) {
   return value ? new Date(value).getTime() : 0;
 }
 
+const NOTIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export async function GET() {
   const studentId = await getCurrentStudentId();
   if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const db = await getDb();
+  const since = new Date(Date.now() - NOTIFICATION_MAX_AGE_MS);
   const student = await db.collection("students").findOne({ studentId });
   if (!student) return NextResponse.json({ error: "Student not found" }, { status: 404 });
 
   const savedUpdates = await db.collection("notifications")
-    .find({ recipientRole: "student", recipientId: studentId })
+    .find({ recipientRole: "student", recipientId: studentId, createdAt: { $gte: since } })
     .sort({ createdAt: -1 })
-    .limit(30)
+    .limit(50)
     .toArray();
-  if (savedUpdates.length) {
-    return NextResponse.json({
-      updates: savedUpdates.map((update) => ({
-        id: update.eventKey,
-        type: update.type,
-        title: update.title,
-        detail: update.detail,
-        createdAt: update.createdAt,
-        lectureId: update.lectureId,
-        version: update.version,
-      })),
-    });
-  }
 
   const [lectures, reminders, downloads, doubts] = await Promise.all([
     db.collection("lectures").find({ assignedStandards: student.standard, assignedDivisions: student.division }).sort({ updatedAt: -1 }).toArray(),
-    db.collection("lectureReminders").find({ studentIds: studentId }).sort({ sentAt: -1 }).toArray(),
-    db.collection("downloads").find({ studentId, completed: true }).sort({ updatedAt: -1 }).limit(20).toArray(),
+    db.collection("lectureReminders").find({ studentIds: studentId, sentAt: { $gte: since } }).sort({ sentAt: -1 }).toArray(),
+    db.collection("downloads").find({ studentId, completed: true, updatedAt: { $gte: since } }).sort({ updatedAt: -1 }).limit(20).toArray(),
     db.collection("doubts").find({ studentId }).sort({ updatedAt: -1 }).toArray(),
   ]);
   const lectureMap = new Map(lectures.map((lecture) => [lecture._id.toString(), lecture]));
@@ -100,6 +90,14 @@ export async function GET() {
     });
   });
 
-  updates.sort((first, second) => updateTime(second.createdAt) - updateTime(first.createdAt));
-  return NextResponse.json({ updates: updates.slice(0, 30) });
+  const saved = savedUpdates.map((update) => ({
+    id: update.eventKey, type: update.type, title: update.title, detail: update.detail,
+    createdAt: update.createdAt, lectureId: update.lectureId, version: update.version,
+  }));
+  const unique = new Map();
+  [...saved, ...updates].forEach((update) => {
+    if (!unique.has(update.id)) unique.set(update.id, update);
+  });
+  const combined = [...unique.values()].filter((update) => updateTime(update.createdAt) >= since.getTime()).sort((first, second) => updateTime(second.createdAt) - updateTime(first.createdAt));
+  return NextResponse.json({ updates: combined.slice(0, 50), hasMore: combined.length > 50 });
 }

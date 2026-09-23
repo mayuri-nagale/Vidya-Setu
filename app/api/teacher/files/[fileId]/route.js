@@ -20,8 +20,13 @@ export async function GET(request, { params }) {
 
   const bucket = new GridFSBucket(db, { bucketName: "lectureFiles" });
   const range = request.headers.get("range");
-  const start = range ? Number(range.match(/bytes=(\d+)-/)?.[1] || 0) : 0;
-  const end = range ? Number(range.match(/-(\d*)$/)?.[1] || file.length - 1) : file.length - 1;
+  const match = range?.match(/^bytes=(\d+)-(\d*)$/);
+  if (range && !match) return new Response("Invalid byte range", { status: 416, headers: { "Content-Range": `bytes */${file.length}` } });
+  const start = match ? Number(match[1]) : 0;
+  const end = match?.[2] ? Number(match[2]) : file.length - 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= file.length) {
+    return new Response("Requested range is not available", { status: 416, headers: { "Content-Range": `bytes */${file.length}` } });
+  }
   const stream = range ? bucket.openDownloadStream(file._id, { start, end: Math.min(end + 1, file.length) }) : bucket.openDownloadStream(file._id);
   return new Response(stream, { status: range ? 206 : 200, headers: { "Content-Type": file.contentType || file.metadata?.mimeType || "application/octet-stream", "Content-Length": String(range ? Math.max(0, Math.min(end + 1, file.length) - start) : file.length), "Accept-Ranges": "bytes", ...(range ? { "Content-Range": `bytes ${start}-${Math.min(end, file.length - 1)}/${file.length}` } : {}), "Content-Disposition": `inline; filename="${file.filename.replace(/"/g, "")}"` } });
 }
