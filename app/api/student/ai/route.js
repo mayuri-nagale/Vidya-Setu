@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentStudentId } from "../../../../lib/auth";
 import { allowRateLimit, clientKey } from "../../../../lib/security";
+import { builtInStudyReply, hasConfiguredProviderKey } from "../../../../lib/study-helper";
 
 export const runtime = "nodejs";
 
@@ -36,9 +37,6 @@ function logFailure(stage, error, details = {}) {
 export async function POST(request) {
   const studentId = await getCurrentStudentId();
   if (!studentId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: "AI Assistant is not configured yet. Add OPENAI_API_KEY to .env.local and restart the app." }, { status: 503 });
-  }
 
   const rate = allowRateLimit(clientKey(request, `student-ai:${studentId}`), { limit: 20, windowMs: 5 * 60 * 1000 });
   if (!rate.allowed) {
@@ -61,6 +59,11 @@ export async function POST(request) {
   }));
   if (input.some((message) => !message.content || message.content.length > MAX_MESSAGE_LENGTH)) {
     return NextResponse.json({ error: "Message must be between 1 and 2000 characters." }, { status: 400 });
+  }
+
+  if (!hasConfiguredProviderKey(process.env.OPENAI_API_KEY)) {
+    const latestQuestion = [...input].reverse().find((message) => message.role === "user")?.content;
+    return NextResponse.json({ answer: builtInStudyReply(latestQuestion), mode: "built-in" });
   }
 
   let response;

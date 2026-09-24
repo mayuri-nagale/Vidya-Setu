@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getDb } from "../../../../lib/mongodb";
 import { getCurrentStudentId } from "../../../../lib/auth";
 import { allowRateLimit, boundedText, clientKey } from "../../../../lib/security";
+import { builtInStudyReply, hasConfiguredProviderKey } from "../../../../lib/study-helper";
 
 export const runtime = "nodejs";
 
@@ -37,7 +38,6 @@ export async function POST(request) {
 
   let question;
   try { question = boundedText(body.question, { field: "Question", min: 2, max: 1200 }); } catch (error) { return NextResponse.json({ error: error.message }, { status: 400 }); }
-  if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: "Lesson helper is not configured yet. Ask your teacher instead.", code: "AI_NOT_CONFIGURED" }, { status: 503 });
 
   const db = await getDb();
   const student = await db.collection("students").findOne({ studentId }, { projection: { standard: 1, division: 1 } });
@@ -47,6 +47,14 @@ export async function POST(request) {
     assignedDivisions: student?.division,
   }, { projection: { title: 1, subject: 1, chapter: 1, description: 1, version: 1, resources: 1 } });
   if (!lecture) return NextResponse.json({ error: "This lesson is not assigned to you." }, { status: 403 });
+
+  if (!hasConfiguredProviderKey(process.env.OPENAI_API_KEY)) {
+    return NextResponse.json({
+      answer: builtInStudyReply(question, lecture),
+      fallback: true,
+      mode: "built-in",
+    });
+  }
 
   const position = body.resourceKind === "video"
     ? `Video timestamp: ${Math.max(0, Math.min(86400, Number(body.timestampSeconds) || 0))} seconds.`
