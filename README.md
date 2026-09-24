@@ -118,7 +118,19 @@ Students can:
 - take lesson quizzes; and
 - use the optional AI lesson helper while studying.
 
+# My Project
+
+![Project Screenshot](./screenshots/login.png)
+
+![Project Screenshot](./screenshots/teacher.png)
+![Project Screenshot](./screenshots/update.png)
+![Project Screenshot](./screenshots/new-Lecture.png)
+![Project Screenshot](./screenshots/teacher.png)
+![Project Screenshot](./screenshots/student.png)
+![Project Screenshot](./screenshots/Nearby.png)
+
 ### Version-safe corrections
+
 
 Vidya Setu treats a correction as an update to an existing lesson rather than an unrelated new upload.
 
