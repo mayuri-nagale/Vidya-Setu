@@ -26,7 +26,7 @@ MONGODB_URI=mongodb://127.0.0.1:27017
 MONGODB_DB=vidya_setu
 SESSION_SECRET=replace-with-a-private-random-string-of-at-least-32-characters
 OPENAI_API_KEY=your-server-only-openai-api-key
-OPENAI_MODEL=gpt-5
+OPENAI_MODEL=gpt-6-luna
 ```
 
 Start MongoDB. On Windows, when installed as a service, use an elevated PowerShell:
@@ -66,7 +66,7 @@ For deployment, set the required variables in the hosting dashboard. Do not run 
 
 ## Lesson helper AI (optional)
 
-Add `OPENAI_API_KEY` and restart the app to enable **Vidya Setu AI** in the student sidebar and **Ask lesson helper** while a student is watching a resource. The key stays on the server. The helper only receives the assigned lesson title, topic, version, teacher description, and current timestamp/page; if it cannot answer confidently, it asks the student to send a doubt to the teacher.
+Add `OPENAI_API_KEY` and restart the app to enable **Ask lesson helper** while a student is watching a resource. The key stays on the server. The helper only receives the assigned lesson title, topic, version, teacher description, and current timestamp/page; if it cannot answer confidently, it asks the student to send a doubt to the teacher.
 
 ## Verify
 

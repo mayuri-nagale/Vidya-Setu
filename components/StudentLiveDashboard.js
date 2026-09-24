@@ -9,6 +9,11 @@ const RESOURCE_CACHE = "vidya-setu-offline-resources-v1";
 const RESOURCE_DATABASE = "vidya-setu-offline-resources-v1";
 const RESOURCE_STORE = "files";
 const NOTIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DEMO_DOWNLOAD_CHUNK_DELAY_MS = process.env.NODE_ENV === "production" ? 0 : 220;
+
+function wait(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
 
 function hasInternetConnection(online) {
   return online && (typeof navigator === "undefined" || navigator.onLine);
@@ -266,9 +271,11 @@ export default function StudentLiveDashboard() {
   const [versionAlerts, setVersionAlerts] = useState([]);
   const [quizzes, setQuizzes] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null);
+  const [directDownloadId, setDirectDownloadId] = useState("");
   const [reminderUpdates, setReminderUpdates] = useState([]);
   const [syncAttempt, setSyncAttempt] = useState(0);
   const [dataRefresh, setDataRefresh] = useState(0);
+  const directDownloadParts = useRef(new Map());
   const [aiMessages, setAiMessages] = useState([
     { role: "assistant", content: "Hi! I'm Vidya Setu AI. What would you like to learn today?" },
   ]);
@@ -657,6 +664,8 @@ export default function StudentLiveDashboard() {
               files={downloads}
               openResource={openResource}
               online={online}
+              onDownload={downloadResource}
+              activeDownloadFileId={directDownloadId}
               onProgress={(
                 item,
                 progress,
@@ -700,6 +709,7 @@ export default function StudentLiveDashboard() {
             setResource(null);
           }}
           onSent={(doubt) => setDoubts((current) => [doubt, ...current])}
+          onDownload={() => void downloadResource(resource)}
         />
       )}
       {activeQuiz && (
@@ -769,6 +779,66 @@ export default function StudentLiveDashboard() {
       });
     setResource({ ...item, localUrl });
     return true;
+  }
+  async function downloadResource(resourceItem) {
+    const item = downloads.find((file) => file.fileId === resourceItem.fileId);
+    if (!item || !hasInternetConnection(online)) return;
+    if (resourceItem.localUrl) URL.revokeObjectURL(resourceItem.localUrl);
+    setResource(null);
+    setActive("downloads");
+    setDirectDownloadId(item.fileId);
+    const stored = directDownloadParts.current.get(item.fileId);
+    const start = stored?.bytes === Number(item.bytesReceived || 0) ? stored.bytes : 0;
+    const chunks = start ? stored.chunks : [];
+    let received = start;
+    let total = Number(item.size || 0);
+    let lastProgressSavedAt = 0;
+    try {
+      const response = await fetch(`/api/teacher/files/${item.fileId}`, {
+        headers: start ? { Range: `bytes=${start}-` } : {},
+      });
+      if (!response.ok || !response.body) throw new Error("Download unavailable");
+      const contentRange = response.headers.get("content-range");
+      total = contentRange
+        ? Number(contentRange.split("/").at(-1))
+        : Number(response.headers.get("content-length") || 0) + start;
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        directDownloadParts.current.set(item.fileId, { bytes: received, chunks });
+        if (Date.now() - lastProgressSavedAt >= 600) {
+          lastProgressSavedAt = Date.now();
+          await saveDownload(item, total ? Math.round((received / total) * 100) : 1, false, received, total, false);
+        }
+        if (DEMO_DOWNLOAD_CHUNK_DELAY_MS) await wait(DEMO_DOWNLOAD_CHUNK_DELAY_MS);
+        if (!navigator.onLine) throw new Error("Connection lost");
+      }
+      const blob = new Blob(chunks, {
+        type: response.headers.get("content-type") || "application/octet-stream",
+      });
+      let cached = false;
+      try {
+        cached = await cacheResource(item, blob);
+        await navigator.storage?.persist?.();
+      } catch {
+        cached = false;
+      }
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = item.filename;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      await saveDownload(item, 100, true, blob.size, blob.size, cached);
+      directDownloadParts.current.delete(item.fileId);
+    } catch {
+      directDownloadParts.current.set(item.fileId, { bytes: received, chunks });
+      await saveDownload(item, total ? Math.round((received / total) * 100) : 0, false, received, total, false);
+    } finally {
+      setDirectDownloadId((current) => current === item.fileId ? "" : current);
+    }
   }
 }
 
@@ -1208,7 +1278,7 @@ function ResumePanel({ files, onResume }) {
   );
 }
 
-function DownloadLibrary({ files, openResource, onProgress, online }) {
+function DownloadLibrary({ files, openResource, onProgress, online, onDownload, activeDownloadFileId }) {
   const [activeDownload, setActiveDownload] = useState("");
   const [status, setStatus] = useState("");
   const [filter, setFilter] = useState("all");
@@ -1270,6 +1340,7 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
     }
   }
   function Card({ file, complete = false }) {
+    const downloading = activeDownloadFileId === file.fileId;
     const resourceItem = {
       ...file,
       lectureId: file.lecture?._id,
@@ -1327,10 +1398,12 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
                 {file.title}
               </button>
               <span
-                className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${complete ? "bg-[#e2f7ee] text-[#149463]" : file.progress ? "bg-[#fff0df] text-[#b86b17]" : "bg-[#e5f0ff] text-[#1675ed]"}`}
+                className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${complete ? "bg-[#e2f7ee] text-[#149463]" : downloading ? "bg-[#e5f0ff] text-[#1675ed]" : file.progress ? "bg-[#fff0df] text-[#b86b17]" : "bg-[#e5f0ff] text-[#1675ed]"}`}
               >
                 {complete
                   ? "Completed"
+                  : downloading
+                    ? "Downloading"
                   : file.progress
                     ? "Paused"
                     : "Not downloaded"}
@@ -1358,17 +1431,19 @@ function DownloadLibrary({ files, openResource, onProgress, online }) {
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 onClick={() =>
-                  complete ? watchOffline() : download(file)
+                  complete ? watchOffline() : onDownload(file)
                 }
-                disabled={activeDownload === file.fileId}
+                disabled={downloading}
                 className="rounded-lg bg-[#1675ed] px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
               >
                 {complete
                   ? "Watch offline"
+                  : downloading
+                    ? "Downloading..."
                   : activeDownload === file.fileId
                     ? "Downloading..."
                     : file.progress
-                      ? "Restart download"
+                      ? "Resume download"
                       : "Download"}
               </button>
               {!complete && (
@@ -2001,7 +2076,6 @@ function LessonHelper({ resource, online, timestamp, pageNumber, setPageNumber, 
       setSending(false);
     }
   }
-
   return (
     <section className="mt-4 rounded-xl border border-[#bcd8ff] bg-[#f5f9ff] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -2085,7 +2159,7 @@ function AIAssistant({ online, messages, setMessages }) {
   );
 }
 
-function OfflineResourceModal({ resource, online, studentId, onClose, onSent }) {
+function OfflineResourceModal({ resource, online, studentId, onClose, onSent, onDownload }) {
   const videoRef = useRef(null);
   const [showAsk, setShowAsk] = useState(false);
   const [showHelper, setShowHelper] = useState(false);
@@ -2194,6 +2268,9 @@ function OfflineResourceModal({ resource, online, studentId, onClose, onSent }) 
           </button>
           <button onClick={() => setShowAsk((current) => !current)} className="rounded-xl border border-[#dfe9e1] px-4 py-3 text-sm font-bold text-[#1d5148]">
             {showAsk ? "Hide ask a doubt" : "Ask mam a doubt"}
+          </button>
+          <button onClick={onDownload} disabled={!hasInternetConnection(online)} className="rounded-xl bg-[#1d5148] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+            Download
           </button>
         </div>
         {aiMessage && <p role="alert" className="mt-3 rounded-lg bg-[#fff0f0] px-3 py-2 text-xs font-semibold text-[#c43838]">{aiMessage}</p>}
