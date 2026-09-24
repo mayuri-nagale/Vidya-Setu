@@ -129,6 +129,20 @@ Students can:
 ![Project Screenshot](./screenshots/student.png)
 ![Project Screenshot](./screenshots/Nearby.png)
 
+## Future Scope
+
+### Native Android App (Flutter)
+Develop Vidya Setu as a full mobile application using Flutter for a smoother and more accessible offline learning experience.
+
+### Smart Storage Management
+Improve management of downloaded and partially downloaded lectures by removing outdated versions, managing cache, and helping students optimize device storage.
+
+### OCR + Speech-to-Text
+Use OCR to extract text from PDFs, PPTs, and images, and Speech-to-Text technology to convert lecture audio and video into searchable text.
+
+### Teacher Progress Dashboard
+Provide teachers with detailed analytics for downloads, learning progress, quiz results, viewed updates, and pending student doubts.
+
 ### Version-safe corrections
 
 
